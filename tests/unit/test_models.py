@@ -14,8 +14,11 @@ from saw import (
     SolutionStatus,
     Stock,
     TerminationReason,
+    VerificationFinding,
+    VerificationFindingCode,
+    VerificationReport,
+    VerificationResult
 )
-
 
 def test_stock_exposes_domain_values_directly() -> None:
     stock = Stock("stock-10", "steel", 10, 2)
@@ -224,3 +227,106 @@ def test_solution_can_represent_an_outcome_without_a_plan() -> None:
 
     assert solution.cut_patterns == ()
     assert solution.objective_value is None
+
+
+def test_verification_result_exposes_stable_values() -> None:
+    assert {result.value for result in VerificationResult} == {"valid", "invalid"}
+
+
+def test_verification_finding_codes_expose_stable_values() -> None:
+    assert {code.value for code in VerificationFindingCode} == {
+        "unknown_stock_id",
+        "unknown_demand_id",
+        "non_positive_repetitions",
+        "empty_pattern",
+        "duplicate_pattern",
+        "pattern_capacity_exceeded",
+        "material_mismatch",
+        "stock_quantity_exceeded",
+        "demand_underproduced",
+        "demand_overproduced",
+        "objective_mismatch",
+    }
+
+
+def test_verification_finding_exposes_message_and_optional_context() -> None:
+    finding = VerificationFinding(
+        code=VerificationFindingCode.MATERIAL_MISMATCH,
+        message="Demand material does not match stock material.",
+        stock_id="stock-10",
+        demand_id="demand-6",
+        pattern_index=2,
+    )
+
+    assert finding.code is VerificationFindingCode.MATERIAL_MISMATCH
+    assert finding.message == "Demand material does not match stock material."
+    assert finding.stock_id == "stock-10"
+    assert finding.demand_id == "demand-6"
+    assert finding.pattern_index == 2
+
+
+def test_verification_finding_context_defaults_to_none() -> None:
+    finding = VerificationFinding(
+        code=VerificationFindingCode.OBJECTIVE_MISMATCH,
+        message="Reported objective does not match the verified objective.",
+    )
+
+    assert finding.stock_id is None
+    assert finding.demand_id is None
+    assert finding.pattern_index is None
+
+
+def test_verification_finding_cannot_be_mutated() -> None:
+    finding = VerificationFinding(
+        code=VerificationFindingCode.EMPTY_PATTERN,
+        message="Pattern contains no pieces.",
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        finding.message = "changed"
+
+
+def test_empty_verification_report_is_valid() -> None:
+    report = VerificationReport(findings=())
+
+    assert report.result is VerificationResult.VALID
+    assert report.is_valid is True
+
+
+def test_verification_report_with_findings_is_invalid() -> None:
+    findings = (
+        VerificationFinding(
+            code=VerificationFindingCode.UNKNOWN_STOCK_ID,
+            message="Unknown stock.",
+            stock_id="missing-stock",
+            pattern_index=0,
+        ),
+        VerificationFinding(
+            code=VerificationFindingCode.DEMAND_UNDERPRODUCED,
+            message="Demand was not fully produced.",
+            demand_id="demand-6",
+        ),
+    )
+
+    report = VerificationReport(findings=findings)
+
+    assert report.findings == findings
+    assert report.result is VerificationResult.INVALID
+    assert report.is_valid is False
+
+
+def test_verification_report_takes_an_immutable_snapshot_of_findings() -> None:
+    finding = VerificationFinding(
+        code=VerificationFindingCode.EMPTY_PATTERN,
+        message="Pattern contains no pieces.",
+        pattern_index=1,
+    )
+    findings = [finding]
+
+    report = VerificationReport(findings=findings)
+    findings.clear()
+
+    assert report.findings == (finding,)
+    assert isinstance(report.findings, tuple)
+    with pytest.raises(FrozenInstanceError):
+        report.findings = ()

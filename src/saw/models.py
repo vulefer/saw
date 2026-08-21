@@ -127,3 +127,49 @@ class Solution:
     def __post_init__(self) -> None:
         object.__setattr__(self, "cut_patterns", tuple(self.cut_patterns))
 
+# represents the result of solution verification
+class VerificationResult(str, Enum):
+    VALID = "valid"
+    INVALID = "invalid"
+
+# enum with every verification failure
+class VerificationFindingCode(str, Enum):
+    UNKNOWN_STOCK_ID = "unknown_stock_id"
+    UNKNOWN_DEMAND_ID = "unknown_demand_id"
+    NON_POSITIVE_REPETITIONS = "non_positive_repetitions"
+    EMPTY_PATTERN = "empty_pattern"
+    DUPLICATE_PATTERN = "duplicate_pattern"
+    PATTERN_CAPACITY_EXCEEDED = "pattern_capacity_exceeded"
+    MATERIAL_MISMATCH = "material_mismatch"
+    STOCK_QUANTITY_EXCEEDED = "stock_quantity_exceeded"
+    DEMAND_UNDERPRODUCED = "demand_underproduced"
+    DEMAND_OVERPRODUCED = "demand_overproduced"
+    OBJECTIVE_MISMATCH = "objective_mismatch"
+
+# represents one specific problem found during verification
+@dataclass(frozen=True, slots=True)
+class VerificationFinding:
+    code: VerificationFindingCode
+    message: str
+    stock_id: str | None = None
+    demand_id: str | None = None
+    pattern_index: int | None = None
+
+# collects all of the problems found during the verification
+@dataclass(frozen=True, slots=True)
+class VerificationReport:
+    findings: tuple[VerificationFinding, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "findings", tuple(self.findings))
+
+    # returns VALID if findings are empty, INVALID if not
+    @property
+    def result(self) -> VerificationResult:
+        if self.findings:
+            return VerificationResult.INVALID
+        return VerificationResult.VALID
+
+    @property
+    def is_valid(self) -> bool:
+        return not self.findings
