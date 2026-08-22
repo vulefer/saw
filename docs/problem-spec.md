@@ -142,6 +142,15 @@ piece longer than every compatible stock length, and a demand whose material
 has no stock. These cases must reach the solver and may be returned as
 `INFEASIBLE` only when infeasibility is proven.
 
+### 2.7 Validation reporting
+
+Validation is deterministic and fail-fast. Saw reports the first error in this
+order: stock records in input order, demand records in input order, duplicate
+stock IDs, then duplicate demand IDs. A primitive-field error identifies its
+record kind, record index, and field. A duplicate-ID error reports every
+conflicting ID in that namespace. Every validation exception also carries a
+stable machine-readable error code.
+
 ## 3. Cutting patterns
 
 A cutting pattern `p` consists of:

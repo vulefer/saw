@@ -5,6 +5,7 @@ from saw import (
     InternalVerificationError,
     SawError,
     ValidationError,
+    ValidationErrorCode,
 )
 from saw import SolutionStatus
 
@@ -49,6 +50,16 @@ def test_specific_exception_can_be_caught_as_saw_error() -> None:
         raise ValidationError("Invalid problem input.")
 
     assert type(captured.value) is ValidationError
+
+
+def test_validation_error_defaults_to_a_stable_general_code() -> None:
+    error = ValidationError("Invalid problem input.")
+
+    assert error.code is ValidationErrorCode.INVALID_PROBLEM
+    assert error.record is None
+    assert error.record_index is None
+    assert error.field is None
+    assert error.conflicting_ids == ()
 
 
 def test_backend_error_preserves_chained_internal_cause() -> None:
