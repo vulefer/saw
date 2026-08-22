@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
+# this somehow prevents circular imports, im not sure how
 if TYPE_CHECKING:
-    from saw.models import Demand, Stock
+    from saw.models import Demand, Problem, Stock
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,3 +84,11 @@ def enumerate_patterns_for_single_stock(
 
     walk(0, stock.length)
     return tuple(patterns)
+
+# function that just loops over the stocks tuple and calls enumeration for each one
+def enumerate_patterns_for_problem(problem: Problem) -> tuple[Pattern, ...]:
+    return tuple(
+        pattern
+        for stock in problem.stocks
+        for pattern in enumerate_patterns_for_single_stock(stock, problem.demands)
+    )
