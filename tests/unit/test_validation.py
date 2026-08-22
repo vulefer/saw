@@ -83,3 +83,66 @@ def test_whitespace_identifier_is_not_normalized_or_rejected() -> None:
     )
 
     assert validate_problem(problem) is None
+
+
+def test_duplicate_stock_ids_produce_validation_error() -> None:
+    problem = Problem(
+        stocks=(
+            Stock("stock-10", "steel", 10, 1),
+            Stock("stock-10", "steel", 20, 1),
+        ),
+        demands=(),
+    )
+
+    with pytest.raises(ValidationError) as captured:
+        validate_problem(problem)
+
+    message = str(captured.value)
+    assert "stock" in message
+    assert repr("stock-10") in message
+
+
+def test_duplicate_demand_ids_produce_validation_error() -> None:
+    problem = Problem(
+        stocks=(),
+        demands=(
+            Demand("demand-6", "steel", 6, 1),
+            Demand("demand-6", "steel", 4, 1),
+        ),
+    )
+
+    with pytest.raises(ValidationError) as captured:
+        validate_problem(problem)
+
+    message = str(captured.value)
+    assert "demand" in message
+    assert repr("demand-6") in message
+
+
+def test_stock_and_demand_ids_occupy_separate_namespaces() -> None:
+    shared_id = "shared-id"
+    problem = Problem(
+        stocks=(Stock(shared_id, "steel", 10, 1),),
+        demands=(Demand(shared_id, "steel", 6, 1),),
+    )
+
+    assert validate_problem(problem) is None
+
+
+def test_duplicate_error_identifies_every_conflicting_id() -> None:
+    problem = Problem(
+        stocks=(
+            Stock("stock-b", "steel", 10, 1),
+            Stock("stock-a", "steel", 10, 1),
+            Stock("stock-b", "steel", 20, 1),
+            Stock("stock-a", "steel", 20, 1),
+        ),
+        demands=(),
+    )
+
+    with pytest.raises(ValidationError) as captured:
+        validate_problem(problem)
+
+    message = str(captured.value)
+    assert repr("stock-a") in message
+    assert repr("stock-b") in message
