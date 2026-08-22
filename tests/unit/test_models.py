@@ -19,6 +19,7 @@ from saw import (
     VerificationReport,
     VerificationResult
 )
+from saw.patterns import Pattern
 
 def test_stock_exposes_domain_values_directly() -> None:
     stock = Stock("stock-10", "steel", 10, 2)
@@ -82,43 +83,58 @@ def test_models_have_only_generic_domain_fields() -> None:
     assert [field.name for field in fields(Problem)] == ["stocks", "demands"]
 
 
-def test_cut_pattern_takes_an_immutable_snapshot_of_piece_counts() -> None:
+def test_pattern_takes_an_immutable_snapshot_of_piece_counts() -> None:
     piece_counts = {"demand-6": 2, "demand-4": 1}
 
-    pattern = CutPattern("stock-10", piece_counts, 3)
+    pattern = Pattern("stock-10", piece_counts)
     piece_counts["demand-6"] = 99
 
     assert dict(pattern.piece_counts) == {"demand-6": 2, "demand-4": 1}
     with pytest.raises(TypeError):
         pattern.piece_counts["demand-6"] = 4
+    with pytest.raises(FrozenInstanceError):
+        pattern.stock_id = "stock-12"
 
 
-def test_cut_pattern_identity_is_canonical() -> None:
-    first = CutPattern(
+def test_pattern_identity_is_canonical_and_hashable() -> None:
+    first = Pattern(
         "stock-10",
         {"demand-6": 2, "demand-4": 1, "unused-demand": 0},
-        1,
     )
-    reordered = CutPattern(
+    reordered = Pattern(
         "stock-10",
         {"demand-4": 1, "demand-6": 2},
-        7,
     )
 
-    assert first.identity_key() == reordered.identity_key()
-    assert hash(first.identity_key()) == hash(reordered.identity_key())
+    assert first == reordered
+    assert hash(first) == hash(reordered)
+    assert {first, reordered} == {first}
+    assert {first: "solver-variable"}[reordered] == "solver-variable"
+    assert dict(first.piece_counts) == {"demand-4": 1, "demand-6": 2}
 
 
-def test_cut_pattern_identity_includes_stock_id() -> None:
-    first = CutPattern("stock-10", {"demand-6": 1}, 1)
-    second = CutPattern("stock-12", {"demand-6": 1}, 1)
+def test_pattern_identity_includes_stock_id() -> None:
+    first = Pattern("stock-10", {"demand-6": 1})
+    second = Pattern("stock-12", {"demand-6": 1})
 
-    assert first.identity_key() != second.identity_key()
+    assert first != second
 
 
-def test_cut_pattern_rejects_negative_piece_counts() -> None:
+def test_pattern_rejects_negative_piece_counts() -> None:
     with pytest.raises(ValueError, match="demand-6"):
-        CutPattern("stock-10", {"demand-6": -1}, 1)
+        Pattern("stock-10", {"demand-6": -1})
+
+
+def test_cut_pattern_keeps_repetitions_separate_from_pattern_identity() -> None:
+    pattern = Pattern("stock-10", {"demand-6": 1})
+
+    used_once = CutPattern(pattern, 1)
+    used_twice = CutPattern(pattern, 2)
+
+    assert used_once != used_twice
+    assert used_once.pattern is pattern
+    assert used_once.stock_id == "stock-10"
+    assert dict(used_once.piece_counts) == {"demand-6": 1}
 
 
 def test_objective_value_exposes_separate_named_components() -> None:
@@ -177,7 +193,7 @@ def test_diagnostics_exposes_structured_solver_information() -> None:
 
 
 def test_solution_takes_an_immutable_snapshot_of_patterns() -> None:
-    pattern = CutPattern("stock-10", {"demand-6": 1}, 2)
+    pattern = CutPattern(Pattern("stock-10", {"demand-6": 1}), 2)
     patterns = [pattern]
     objective = ObjectiveValue(2, 8, 1)
     diagnostics = Diagnostics(

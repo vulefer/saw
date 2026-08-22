@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from enum import Enum
 from collections.abc import Mapping
-from types import MappingProxyType
+
+from saw.patterns import Pattern
 
 @dataclass(frozen=True, slots=True)
 class Stock:
@@ -33,27 +34,16 @@ class Problem:
 
 @dataclass(frozen=True, slots=True)
 class CutPattern:
-    stock_id: str
-    piece_counts: Mapping[str, int] # format is demand_id :  int
+    pattern: Pattern
     repetitions: int
 
-    # makes the piece_counts immutable
-    def __post_init__(self) -> None:
-        # checks that all the counts are non-negative
-        for demand_id, count in self.piece_counts.items():
-            if count < 0:
-                raise ValueError(f"Negative piece count for demand {demand_id!r}")
+    @property
+    def stock_id(self) -> str:
+        return self.pattern.stock_id
 
-        normalized_counts = {
-            demand_id: count
-            for demand_id, count in self.piece_counts.items()
-            if count > 0
-        }
-        object.__setattr__(self, "piece_counts", MappingProxyType(normalized_counts))
-
-    # returns a hashable tuple that can be used for dict keys, sets, etc...
-    def identity_key(self) -> tuple[str, tuple[tuple[str, int], ...]]:
-        return self.stock_id, tuple(sorted(self.piece_counts.items()))
+    @property
+    def piece_counts(self) -> Mapping[str, int]:
+        return self.pattern.piece_counts
 
 # what saw can claim about the final result after the verification and proof checks
 class SolutionStatus(str, Enum):
