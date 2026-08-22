@@ -3,13 +3,26 @@ from saw.models import Demand, Problem, Stock
 
 
 def validate_problem(problem: Problem) -> None:
-    # validating the individual stocks and demands
+    """Validate the problem's data contract.
+
+    This function intentionally does not reject a problem because stock is
+    absent or unusable for a demand. Those are valid optimization inputs whose
+    feasibility must be decided by the solver.
+    """
+    validate_problem_records(problem)
+    validate_problem_collections(problem)
+
+
+def validate_problem_records(problem: Problem) -> None:
+    # validation of the individual records
     for index, stock in enumerate(problem.stocks):
         validate_stock(stock, index)
     for index, demand in enumerate(problem.demands):
         validate_demand(demand, index)
 
-    # validating the stocks and demands collections
+
+def validate_problem_collections(problem: Problem) -> None:
+    # validation of the whole collections and structural rules
     require_unique_ids(tuple(stock.stock_id for stock in problem.stocks), "stock")
     require_unique_ids(tuple(demand.demand_id for demand in problem.demands), "demand")
 

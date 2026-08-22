@@ -146,3 +146,91 @@ def test_duplicate_error_identifies_every_conflicting_id() -> None:
     message = str(captured.value)
     assert repr("stock-a") in message
     assert repr("stock-b") in message
+
+
+@pytest.mark.parametrize(
+    ("stocks", "demands"),
+    [
+        ((), ()),
+        ((Stock("stock-10", "steel", 10, 1),), ()),
+        ((), (Demand("demand-6", "steel", 6, 1),)),
+    ],
+)
+def test_empty_stock_or_demand_collections_are_valid(
+    stocks: tuple[Stock, ...],
+    demands: tuple[Demand, ...],
+) -> None:
+    problem = Problem(stocks=stocks, demands=demands)
+
+    assert validate_problem(problem) is None
+
+
+def test_reordering_valid_inputs_does_not_change_validation() -> None:
+    stocks = (
+        Stock("stock-steel", "steel", 10, 1),
+        Stock("stock-aluminum", "aluminum", 12, 2),
+    )
+    demands = (
+        Demand("demand-steel", "steel", 6, 1),
+        Demand("demand-aluminum", "aluminum", 4, 3),
+    )
+
+    for ordered_stocks in (stocks, tuple(reversed(stocks))):
+        for ordered_demands in (demands, tuple(reversed(demands))):
+            problem = Problem(stocks=ordered_stocks, demands=ordered_demands)
+
+            assert validate_problem(problem) is None
+
+
+@pytest.mark.parametrize(
+    "stocks",
+    [
+        (
+            Stock("stock-b", "steel", 10, 1),
+            Stock("stock-a", "steel", 10, 1),
+            Stock("stock-b", "steel", 20, 1),
+            Stock("stock-a", "steel", 20, 1),
+        ),
+        (
+            Stock("stock-a", "steel", 20, 1),
+            Stock("stock-b", "steel", 20, 1),
+            Stock("stock-a", "steel", 10, 1),
+            Stock("stock-b", "steel", 10, 1),
+        ),
+    ],
+)
+def test_reordering_duplicate_ids_preserves_validation_error(
+    stocks: tuple[Stock, ...],
+) -> None:
+    problem = Problem(stocks=stocks, demands=())
+
+    with pytest.raises(ValidationError) as captured:
+        validate_problem(problem)
+
+    assert str(captured.value) == "Duplicate stock IDs: 'stock-a', 'stock-b'."
+
+
+@pytest.mark.parametrize(
+    ("stocks", "demands"),
+    [
+        (
+            (Stock("stock-steel", "steel", 10, 1),),
+            (Demand("demand-aluminum", "aluminum", 6, 1),),
+        ),
+        (
+            (Stock("stock-short", "steel", 5, 1),),
+            (Demand("demand-long", "steel", 6, 1),),
+        ),
+        (
+            (Stock("stock-limited", "steel", 10, 1),),
+            (Demand("demand-many", "steel", 6, 2),),
+        ),
+    ],
+)
+def test_potential_infeasibility_is_not_a_validation_error(
+    stocks: tuple[Stock, ...],
+    demands: tuple[Demand, ...],
+) -> None:
+    problem = Problem(stocks=stocks, demands=demands)
+
+    assert validate_problem(problem) is None
