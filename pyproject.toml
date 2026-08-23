@@ -7,7 +7,7 @@ name = "saw"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-    "PuLP>=3.3,<4",
+    "PuLP[cbc]>=3.3,<4",
 ]
 
 [project.optional-dependencies]

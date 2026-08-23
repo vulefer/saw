@@ -19,5 +19,13 @@ Run the complete test suite with:
 python -m pytest
 ```
 
+## Optimization backend dependency
+
+Saw v0.1 supports PuLP versions `>=3.3,<4`. The required `cbc` extra is
+declared with that dependency so the adapter can supply PuLP with an
+executable CBC solver.
+The adapter checks CBC availability at runtime and reports the installed PuLP
+version in its availability result.
+
 Public package publishing and release automation are deferred to a later
 release.
