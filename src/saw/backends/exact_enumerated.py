@@ -42,3 +42,23 @@ def build_pattern_variables(
         )
         for index, pattern in enumerate(canonical_patterns)
     }
+
+
+# configures the exact demand constraint inside the PuLP model
+def add_exact_demand_constraints(
+    model: pulp.LpProblem,
+    problem: Problem,
+    pattern_variables: dict[Pattern, pulp.LpVariable],
+) -> None:
+    for index, demand in enumerate(problem.demands):
+        # sums only the pieces associated with this stable demand ID
+        total_produced = pulp.lpSum(
+            pattern.piece_counts.get(demand.demand_id, 0) * variable
+            for pattern, variable in pattern_variables.items()
+        )
+
+        # adds the demanded total as a constraint for every demand item
+        model.addConstraint(
+            total_produced == demand.quantity,
+            name=f"exact_demand_{index:06d}",
+        )
