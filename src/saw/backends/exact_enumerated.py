@@ -150,3 +150,89 @@ def solve_primary_stock_count_stage(
         backend_status=backend_status,
         optimal_stock_count=rounded_stock_count,
     )
+
+# "between the steps" function that returns a LpAffineExpression that describes the total leftover
+def build_total_leftover_expression(
+    problem: Problem,
+    pattern_variables: dict[Pattern, pulp.LpVariable],
+) -> pulp.LpAffineExpression:
+    stocks_by_id = {
+        stock.stock_id: stock
+        for stock in problem.stocks
+    }
+    demands_by_id = {
+        demand.demand_id : demand
+        for demand in problem.demands
+    }
+
+    # this calculates the leftover for every pattern and its stock and multiplies it by the
+    # repetition of that pattern in the solution to calculate the total leftover
+    return pulp.lpSum(
+        (
+        stocks_by_id[pattern.stock_id].length
+         - sum(demands_by_id[demand_id].length * piece_count
+               for demand_id, piece_count in pattern.piece_counts.items())
+        ) * variable
+    for pattern, variable in pattern_variables.items()
+    )
+
+# this is the intended "whole-step" function that uses the previous function to add the optimal stock
+# constraint to the problem
+def configure_secondary_leftover_stage(
+    model: pulp.LpProblem,
+    problem: Problem,
+    pattern_variables: dict[Pattern, pulp.LpVariable],
+    stock_count: pulp.LpAffineExpression,
+    optimal_stock_count: int,
+) -> pulp.LpAffineExpression:
+    model.addConstraint(
+        stock_count == optimal_stock_count,
+        name="fixed_optimal_stock_count",
+    )
+
+    total_leftover = build_total_leftover_expression(
+        problem,
+        pattern_variables,
+    )
+    model.setObjective(total_leftover)
+
+    return total_leftover
+
+# wraps the result of the secondary model
+@dataclass(frozen=True, slots=True)
+class SecondaryLeftoverResult:
+    backend_status: BackendStatus
+    optimal_total_leftover: int | None
+
+def solve_secondary_leftover_stage(
+    model: pulp.LpProblem,
+    total_leftover: pulp.LpAffineExpression,
+    adapter: PulpCbcAdapter,
+    options: BackendOptions,
+) -> SecondaryLeftoverResult:
+    backend_status = adapter.solve(model, options)
+
+    if backend_status is not BackendStatus.OPTIMAL:
+        return SecondaryLeftoverResult(
+            backend_status=backend_status,
+            optimal_total_leftover=None,
+        )
+
+    raw_total_leftover = pulp.value(total_leftover)
+
+    if raw_total_leftover is None:
+        raise RuntimeError(
+            "CBC reported an optimal result without an objective value."
+        )
+
+    rounded_total_leftover = round(raw_total_leftover)
+
+    if abs(raw_total_leftover - rounded_total_leftover) > 1e-7:
+        raise RuntimeError(
+            "The optimal total leftover was not integral."
+        )
+
+    return SecondaryLeftoverResult(
+        backend_status=backend_status,
+        optimal_total_leftover=rounded_total_leftover,
+    )

@@ -5,17 +5,22 @@ from saw import Demand, Problem, Stock
 from saw.backends.base import BackendOptions
 from saw.backends.exact_enumerated import (
     PrimaryStockCountResult,
+    SecondaryLeftoverResult,
     add_exact_demand_constraints,
     add_exact_stock_constraints,
     build_pattern_variables,
     build_primary_stock_count_model,
+    build_total_leftover_expression,
+    configure_secondary_leftover_stage,
     solve_primary_stock_count_stage,
+    solve_secondary_leftover_stage,
 )
+from saw.backends.pulp_backend import PulpCbcAdapter
 from saw.models import BackendStatus
 from saw.patterns import Pattern
 
 
-class FakePrimaryStageAdapter:
+class FakeStageAdapter:
     def __init__(
         self,
         status: BackendStatus = BackendStatus.OPTIMAL,
@@ -413,7 +418,7 @@ def test_primary_stage_records_a_proven_optimal_stock_count() -> None:
         (pattern,),
     )
     variables[pattern].varValue = 2.0
-    adapter = FakePrimaryStageAdapter()
+    adapter = FakeStageAdapter()
     options = BackendOptions(time_limit_seconds=5)
 
     result = solve_primary_stock_count_stage(
@@ -445,7 +450,7 @@ def test_primary_stage_records_no_optimum_without_an_optimality_proof(
 ) -> None:
     model = pulp.LpProblem("primary_stock_count", pulp.LpMinimize)
     stock_count = pulp.LpAffineExpression()
-    adapter = FakePrimaryStageAdapter(status=backend_status)
+    adapter = FakeStageAdapter(status=backend_status)
 
     result = solve_primary_stock_count_stage(
         model,
@@ -465,7 +470,7 @@ def test_primary_stage_does_not_translate_backend_failure_to_infeasibility(
     model = pulp.LpProblem("primary_stock_count", pulp.LpMinimize)
     stock_count = pulp.LpAffineExpression()
     solve_error = RuntimeError("backend failed")
-    adapter = FakePrimaryStageAdapter(solve_error=solve_error)
+    adapter = FakeStageAdapter(solve_error=solve_error)
 
     with pytest.raises(RuntimeError) as captured:
         solve_primary_stock_count_stage(
@@ -496,7 +501,7 @@ def test_primary_stage_rejects_a_missing_optimal_objective_value() -> None:
         solve_primary_stock_count_stage(
             model,
             stock_count,
-            FakePrimaryStageAdapter(),
+            FakeStageAdapter(),
             BackendOptions(),
         )
 
@@ -517,6 +522,243 @@ def test_primary_stage_rejects_a_non_integral_optimal_stock_count() -> None:
         solve_primary_stock_count_stage(
             model,
             stock_count,
-            FakePrimaryStageAdapter(),
+            FakeStageAdapter(),
             BackendOptions(),
         )
+
+
+def test_total_leftover_expression_uses_stock_and_cut_lengths() -> None:
+    problem = Problem(
+        stocks=(
+            Stock("stock-10", "steel", 10, 5),
+            Stock("stock-14", "steel", 14, 5),
+        ),
+        demands=(
+            Demand("demand-4", "steel", 4, 5),
+            Demand("demand-3", "steel", 3, 5),
+        ),
+    )
+    tight_pattern = Pattern(
+        "stock-10",
+        {"demand-4": 1, "demand-3": 2},
+    )
+    roomy_pattern = Pattern(
+        "stock-14",
+        {"demand-4": 1, "demand-3": 1},
+    )
+    variables = build_pattern_variables(
+        problem,
+        (roomy_pattern, tight_pattern),
+    )
+
+    total_leftover = build_total_leftover_expression(problem, variables)
+
+    assert total_leftover.get(variables[tight_pattern], 0) == 0
+    assert total_leftover.get(variables[roomy_pattern], 0) == 7
+
+    variables[tight_pattern].varValue = 2
+    variables[roomy_pattern].varValue = 3
+    assert pulp.value(total_leftover) == 21
+
+
+def test_secondary_stage_fixes_stock_count_and_replaces_objective() -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 4),),
+        demands=(Demand("demand-4", "steel", 4, 3),),
+    )
+    single_piece_pattern = Pattern("stock-10", {"demand-4": 1})
+    double_piece_pattern = Pattern("stock-10", {"demand-4": 2})
+    model, variables, stock_count = build_primary_stock_count_model(
+        problem,
+        (single_piece_pattern, double_piece_pattern),
+    )
+
+    total_leftover = configure_secondary_leftover_stage(
+        model,
+        problem,
+        variables,
+        stock_count,
+        optimal_stock_count=2,
+    )
+
+    fixed_count = _constraint_by_name(
+        model,
+        "fixed_optimal_stock_count",
+    )
+    assert fixed_count.sense == pulp.LpConstraintEQ
+    assert model.objective is total_leftover
+    assert total_leftover.get(variables[single_piece_pattern], 0) == 6
+    assert total_leftover.get(variables[double_piece_pattern], 0) == 2
+
+    variables[single_piece_pattern].varValue = 1
+    variables[double_piece_pattern].varValue = 1
+    assert fixed_count.valid(0)
+
+    variables[single_piece_pattern].varValue = 3
+    variables[double_piece_pattern].varValue = 0
+    assert not fixed_count.valid(0)
+
+
+def test_secondary_stage_records_a_proven_optimal_leftover() -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 3),),
+        demands=(Demand("demand-4", "steel", 4, 2),),
+    )
+    pattern = Pattern("stock-10", {"demand-4": 1})
+    variables = build_pattern_variables(problem, (pattern,))
+    total_leftover = build_total_leftover_expression(problem, variables)
+    variables[pattern].varValue = 2.0
+    model = pulp.LpProblem("secondary_total_leftover", pulp.LpMinimize)
+    adapter = FakeStageAdapter()
+    options = BackendOptions(time_limit_seconds=5)
+
+    result = solve_secondary_leftover_stage(
+        model,
+        total_leftover,
+        adapter,
+        options,
+    )
+
+    assert result == SecondaryLeftoverResult(
+        backend_status=BackendStatus.OPTIMAL,
+        optimal_total_leftover=12,
+    )
+    assert adapter.model is model
+    assert adapter.options is options
+
+
+@pytest.mark.parametrize(
+    "backend_status",
+    [
+        BackendStatus.FEASIBLE,
+        BackendStatus.INFEASIBLE,
+        BackendStatus.LIMIT_REACHED,
+        BackendStatus.NOT_SOLVED,
+        BackendStatus.UNKNOWN,
+    ],
+)
+def test_secondary_stage_records_no_optimum_without_an_optimality_proof(
+    backend_status: BackendStatus,
+) -> None:
+    model = pulp.LpProblem("secondary_total_leftover", pulp.LpMinimize)
+    total_leftover = pulp.LpAffineExpression()
+
+    result = solve_secondary_leftover_stage(
+        model,
+        total_leftover,
+        FakeStageAdapter(status=backend_status),
+        BackendOptions(),
+    )
+
+    assert result == SecondaryLeftoverResult(
+        backend_status=backend_status,
+        optimal_total_leftover=None,
+    )
+
+
+def test_secondary_stage_propagates_backend_failure() -> None:
+    model = pulp.LpProblem("secondary_total_leftover", pulp.LpMinimize)
+    total_leftover = pulp.LpAffineExpression()
+    solve_error = RuntimeError("backend failed")
+
+    with pytest.raises(RuntimeError) as captured:
+        solve_secondary_leftover_stage(
+            model,
+            total_leftover,
+            FakeStageAdapter(solve_error=solve_error),
+            BackendOptions(),
+        )
+
+    assert captured.value is solve_error
+
+
+def test_secondary_stage_rejects_a_missing_optimal_objective_value() -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 1),),
+        demands=(Demand("demand-4", "steel", 4, 1),),
+    )
+    pattern = Pattern("stock-10", {"demand-4": 1})
+    variables = build_pattern_variables(problem, (pattern,))
+    total_leftover = build_total_leftover_expression(problem, variables)
+
+    with pytest.raises(
+        RuntimeError,
+        match="optimal result without an objective value",
+    ):
+        solve_secondary_leftover_stage(
+            pulp.LpProblem("secondary_total_leftover", pulp.LpMinimize),
+            total_leftover,
+            FakeStageAdapter(),
+            BackendOptions(),
+        )
+
+
+def test_secondary_stage_rejects_a_non_integral_optimal_leftover() -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 1),),
+        demands=(Demand("demand-4", "steel", 4, 1),),
+    )
+    pattern = Pattern("stock-10", {"demand-4": 1})
+    variables = build_pattern_variables(problem, (pattern,))
+    total_leftover = build_total_leftover_expression(problem, variables)
+    variables[pattern].varValue = 0.25
+
+    with pytest.raises(RuntimeError, match="was not integral"):
+        solve_secondary_leftover_stage(
+            pulp.LpProblem("secondary_total_leftover", pulp.LpMinimize),
+            total_leftover,
+            FakeStageAdapter(),
+            BackendOptions(),
+        )
+
+
+def test_secondary_optimization_preserves_primary_optimum() -> None:
+    problem = Problem(
+        stocks=(
+            Stock("stock-10", "steel", 10, 1),
+            Stock("stock-8", "steel", 8, 1),
+        ),
+        demands=(Demand("demand-6", "steel", 6, 1),),
+    )
+    long_stock_pattern = Pattern("stock-10", {"demand-6": 1})
+    short_stock_pattern = Pattern("stock-8", {"demand-6": 1})
+    model, variables, stock_count = build_primary_stock_count_model(
+        problem,
+        (long_stock_pattern, short_stock_pattern),
+    )
+    adapter = PulpCbcAdapter()
+    options = BackendOptions()
+
+    primary_result = solve_primary_stock_count_stage(
+        model,
+        stock_count,
+        adapter,
+        options,
+    )
+    assert primary_result == PrimaryStockCountResult(
+        backend_status=BackendStatus.OPTIMAL,
+        optimal_stock_count=1,
+    )
+    assert primary_result.optimal_stock_count is not None
+
+    total_leftover = configure_secondary_leftover_stage(
+        model,
+        problem,
+        variables,
+        stock_count,
+        optimal_stock_count=primary_result.optimal_stock_count,
+    )
+    secondary_result = solve_secondary_leftover_stage(
+        model,
+        total_leftover,
+        adapter,
+        options,
+    )
+
+    assert secondary_result == SecondaryLeftoverResult(
+        backend_status=BackendStatus.OPTIMAL,
+        optimal_total_leftover=2,
+    )
+    assert pulp.value(stock_count) == 1
+    assert variables[short_stock_pattern].varValue == 1
+    assert variables[long_stock_pattern].varValue == 0
