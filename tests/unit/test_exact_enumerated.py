@@ -3,6 +3,7 @@ import pulp
 from saw import Demand, Problem, Stock
 from saw.backends.exact_enumerated import (
     add_exact_demand_constraints,
+    add_exact_stock_constraints,
     build_pattern_variables,
 )
 from saw.patterns import Pattern
@@ -193,3 +194,88 @@ def test_demand_absent_from_all_patterns_creates_a_contradiction() -> None:
     assert missing_constraint.sense == pulp.LpConstraintEQ
     assert missing_constraint.constant == -1
     assert not missing_constraint.valid(0)
+
+
+def test_adds_one_inventory_constraint_per_stock_id() -> None:
+    problem = Problem(
+        stocks=(
+            Stock("steel-stock", "steel", 10, 3),
+            Stock("wood-stock", "wood", 10, 2),
+        ),
+        demands=(),
+    )
+    steel_pattern = Pattern("steel-stock", {"steel-demand": 1})
+    wood_pattern = Pattern("wood-stock", {"wood-demand": 1})
+    variables = build_pattern_variables(
+        problem,
+        (wood_pattern, steel_pattern),
+    )
+    model = pulp.LpProblem("bounded_stock")
+
+    add_exact_stock_constraints(model, problem, variables)
+
+    assert tuple(
+        constraint.name
+        for constraint in _model_constraints(model)
+    ) == (
+        "bounded_stock_000000",
+        "bounded_stock_000001",
+    )
+    steel_constraint = _constraint_by_name(model, "bounded_stock_000000")
+    wood_constraint = _constraint_by_name(model, "bounded_stock_000001")
+    assert steel_constraint.sense == pulp.LpConstraintLE
+    assert wood_constraint.sense == pulp.LpConstraintLE
+    assert steel_constraint.get(variables[steel_pattern], 0) == 1
+    assert steel_constraint.get(variables[wood_pattern], 0) == 0
+    assert wood_constraint.get(variables[steel_pattern], 0) == 0
+    assert wood_constraint.get(variables[wood_pattern], 0) == 1
+
+
+def test_stock_constraint_limits_usage_across_all_of_its_patterns() -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 3),),
+        demands=(),
+    )
+    first_pattern = Pattern("stock-10", {"demand-6": 1})
+    second_pattern = Pattern("stock-10", {"demand-4": 2})
+    variables = build_pattern_variables(
+        problem,
+        (first_pattern, second_pattern),
+    )
+    model = pulp.LpProblem("shared_stock_limit")
+    add_exact_stock_constraints(model, problem, variables)
+    constraint = _constraint_by_name(model, "bounded_stock_000000")
+
+    variables[first_pattern].varValue = 1
+    variables[second_pattern].varValue = 2
+    assert constraint.valid(0)
+
+    variables[first_pattern].varValue = 2
+    variables[second_pattern].varValue = 2
+    assert not constraint.valid(0)
+
+
+def test_equal_length_stock_records_remain_independently_bounded() -> None:
+    problem = Problem(
+        stocks=(
+            Stock("first-stock", "steel", 10, 1),
+            Stock("second-stock", "steel", 10, 4),
+        ),
+        demands=(),
+    )
+    first_pattern = Pattern("first-stock", {"demand-4": 1})
+    second_pattern = Pattern("second-stock", {"demand-4": 1})
+    variables = build_pattern_variables(
+        problem,
+        (first_pattern, second_pattern),
+    )
+    model = pulp.LpProblem("independent_stock_limits")
+    add_exact_stock_constraints(model, problem, variables)
+
+    first_constraint = _constraint_by_name(model, "bounded_stock_000000")
+    second_constraint = _constraint_by_name(model, "bounded_stock_000001")
+    variables[first_pattern].varValue = 2
+    variables[second_pattern].varValue = 2
+
+    assert not first_constraint.valid(0)
+    assert second_constraint.valid(0)

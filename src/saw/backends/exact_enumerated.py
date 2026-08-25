@@ -62,3 +62,22 @@ def add_exact_demand_constraints(
             total_produced == demand.quantity,
             name=f"exact_demand_{index:06d}",
         )
+
+
+# configures the bounded stock constraint inside the PuLP model
+def add_exact_stock_constraints(
+    model: pulp.LpProblem,
+    problem: Problem,
+    pattern_variables: dict[Pattern, pulp.LpVariable],
+) -> None:
+    for index, stock in enumerate(problem.stocks):
+        total_stock_used = pulp.lpSum(
+            variable
+            for pattern, variable in pattern_variables.items()
+            if pattern.stock_id == stock.stock_id
+        )
+
+        model.addConstraint(
+            total_stock_used <= stock.quantity,
+            name=f"bounded_stock_{index:06d}",
+        )
