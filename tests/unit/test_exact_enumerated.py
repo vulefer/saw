@@ -1,12 +1,41 @@
 import pulp
+import pytest
 
 from saw import Demand, Problem, Stock
+from saw.backends.base import BackendOptions
 from saw.backends.exact_enumerated import (
+    PrimaryStockCountResult,
     add_exact_demand_constraints,
     add_exact_stock_constraints,
     build_pattern_variables,
+    build_primary_stock_count_model,
+    solve_primary_stock_count_stage,
 )
+from saw.models import BackendStatus
 from saw.patterns import Pattern
+
+
+class FakePrimaryStageAdapter:
+    def __init__(
+        self,
+        status: BackendStatus = BackendStatus.OPTIMAL,
+        solve_error: Exception | None = None,
+    ) -> None:
+        self.status = status
+        self.solve_error = solve_error
+        self.model: pulp.LpProblem | None = None
+        self.options: BackendOptions | None = None
+
+    def solve(
+        self,
+        model: pulp.LpProblem,
+        options: BackendOptions,
+    ) -> BackendStatus:
+        self.model = model
+        self.options = options
+        if self.solve_error is not None:
+            raise self.solve_error
+        return self.status
 
 
 def _model_constraints(
@@ -279,3 +308,215 @@ def test_equal_length_stock_records_remain_independently_bounded() -> None:
 
     assert not first_constraint.valid(0)
     assert second_constraint.valid(0)
+
+
+def test_primary_model_is_a_minimization_problem_with_all_constraints() -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 3),),
+        demands=(Demand("demand-4", "steel", 4, 2),),
+    )
+    pattern = Pattern("stock-10", {"demand-4": 2})
+
+    model, variables, stock_count = build_primary_stock_count_model(
+        problem,
+        (pattern,),
+    )
+
+    assert model.name == "primary_stock_count"
+    assert model.sense == pulp.LpMinimize
+    assert model.objective is stock_count
+    assert set(variables) == {pattern}
+    assert tuple(
+        constraint.name
+        for constraint in _model_constraints(model)
+    ) == (
+        "exact_demand_000000",
+        "bounded_stock_000000",
+    )
+
+
+def test_primary_objective_counts_each_physical_stock_piece() -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 4),),
+        demands=(Demand("demand-4", "steel", 4, 3),),
+    )
+    single_piece_pattern = Pattern("stock-10", {"demand-4": 1})
+    double_piece_pattern = Pattern("stock-10", {"demand-4": 2})
+
+    model, variables, stock_count = build_primary_stock_count_model(
+        problem,
+        (single_piece_pattern, double_piece_pattern),
+    )
+
+    assert model.objective is stock_count
+    assert stock_count.get(variables[single_piece_pattern], 0) == 1
+    assert stock_count.get(variables[double_piece_pattern], 0) == 1
+
+    variables[single_piece_pattern].varValue = 3
+    variables[double_piece_pattern].varValue = 0
+    assert pulp.value(stock_count) == 3
+
+
+def test_returned_stock_count_can_be_fixed_for_a_later_stage() -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 4),),
+        demands=(Demand("demand-4", "steel", 4, 3),),
+    )
+    single_piece_pattern = Pattern("stock-10", {"demand-4": 1})
+    double_piece_pattern = Pattern("stock-10", {"demand-4": 2})
+    model, variables, stock_count = build_primary_stock_count_model(
+        problem,
+        (single_piece_pattern, double_piece_pattern),
+    )
+
+    model.addConstraint(
+        stock_count == 2,
+        name="fixed_optimal_stock_count",
+    )
+    fixed_count = _constraint_by_name(
+        model,
+        "fixed_optimal_stock_count",
+    )
+
+    variables[single_piece_pattern].varValue = 1
+    variables[double_piece_pattern].varValue = 1
+    assert fixed_count.valid(0)
+
+    variables[single_piece_pattern].varValue = 3
+    variables[double_piece_pattern].varValue = 0
+    assert not fixed_count.valid(0)
+
+
+def test_primary_model_handles_an_empty_pattern_collection() -> None:
+    problem = Problem(stocks=(), demands=())
+
+    model, variables, stock_count = build_primary_stock_count_model(
+        problem,
+        (),
+    )
+
+    assert variables == {}
+    assert model.objective is stock_count
+    assert len(stock_count) == 0
+    assert stock_count.constant == 0
+    assert _model_constraints(model) == ()
+
+
+def test_primary_stage_records_a_proven_optimal_stock_count() -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 3),),
+        demands=(Demand("demand-4", "steel", 4, 2),),
+    )
+    pattern = Pattern("stock-10", {"demand-4": 1})
+    model, variables, stock_count = build_primary_stock_count_model(
+        problem,
+        (pattern,),
+    )
+    variables[pattern].varValue = 2.0
+    adapter = FakePrimaryStageAdapter()
+    options = BackendOptions(time_limit_seconds=5)
+
+    result = solve_primary_stock_count_stage(
+        model,
+        stock_count,
+        adapter,
+        options,
+    )
+
+    assert result == PrimaryStockCountResult(
+        backend_status=BackendStatus.OPTIMAL,
+        optimal_stock_count=2,
+    )
+    assert adapter.model is model
+    assert adapter.options is options
+
+
+@pytest.mark.parametrize(
+    "backend_status",
+    [
+        BackendStatus.FEASIBLE,
+        BackendStatus.INFEASIBLE,
+        BackendStatus.NOT_SOLVED,
+        BackendStatus.UNKNOWN,
+    ],
+)
+def test_primary_stage_records_no_optimum_without_an_optimality_proof(
+    backend_status: BackendStatus,
+) -> None:
+    model = pulp.LpProblem("primary_stock_count", pulp.LpMinimize)
+    stock_count = pulp.LpAffineExpression()
+    adapter = FakePrimaryStageAdapter(status=backend_status)
+
+    result = solve_primary_stock_count_stage(
+        model,
+        stock_count,
+        adapter,
+        BackendOptions(),
+    )
+
+    assert result == PrimaryStockCountResult(
+        backend_status=backend_status,
+        optimal_stock_count=None,
+    )
+
+
+def test_primary_stage_does_not_translate_backend_failure_to_infeasibility(
+) -> None:
+    model = pulp.LpProblem("primary_stock_count", pulp.LpMinimize)
+    stock_count = pulp.LpAffineExpression()
+    solve_error = RuntimeError("backend failed")
+    adapter = FakePrimaryStageAdapter(solve_error=solve_error)
+
+    with pytest.raises(RuntimeError) as captured:
+        solve_primary_stock_count_stage(
+            model,
+            stock_count,
+            adapter,
+            BackendOptions(),
+        )
+
+    assert captured.value is solve_error
+
+
+def test_primary_stage_rejects_a_missing_optimal_objective_value() -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 1),),
+        demands=(Demand("demand-4", "steel", 4, 1),),
+    )
+    pattern = Pattern("stock-10", {"demand-4": 1})
+    model, _, stock_count = build_primary_stock_count_model(
+        problem,
+        (pattern,),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="optimal result without an objective value",
+    ):
+        solve_primary_stock_count_stage(
+            model,
+            stock_count,
+            FakePrimaryStageAdapter(),
+            BackendOptions(),
+        )
+
+
+def test_primary_stage_rejects_a_non_integral_optimal_stock_count() -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 2),),
+        demands=(Demand("demand-4", "steel", 4, 1),),
+    )
+    pattern = Pattern("stock-10", {"demand-4": 1})
+    model, variables, stock_count = build_primary_stock_count_model(
+        problem,
+        (pattern,),
+    )
+    variables[pattern].varValue = 1.5
+
+    with pytest.raises(RuntimeError, match="was not integral"):
+        solve_primary_stock_count_stage(
+            model,
+            stock_count,
+            FakePrimaryStageAdapter(),
+            BackendOptions(),
+        )
