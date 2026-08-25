@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import pulp
 
+from saw import Stock
 from saw.backends.base import BackendOptions
 from saw.backends.pulp_backend import PulpCbcAdapter
 from saw.models import BackendStatus, Problem
@@ -86,6 +87,9 @@ def add_exact_stock_constraints(
             name=f"bounded_stock_{index:06d}",
         )
 
+"""
+ --- Stage 1: minimize the total number of stock pieces used. ---
+"""
 # this creates an LpProblem instance that only minimizes the number of stocks used, hence called primary
 def build_primary_stock_count_model(
         problem: Problem,
@@ -150,6 +154,10 @@ def solve_primary_stock_count_stage(
         backend_status=backend_status,
         optimal_stock_count=rounded_stock_count,
     )
+
+"""
+--- Stage 2: minimize total leftover while preserving the optimal stock count. ---
+"""
 
 # "between the steps" function that returns a LpAffineExpression that describes the total leftover
 def build_total_leftover_expression(
@@ -235,4 +243,104 @@ def solve_secondary_leftover_stage(
     return SecondaryLeftoverResult(
         backend_status=backend_status,
         optimal_total_leftover=rounded_total_leftover,
+    )
+
+"""
+--- Stage 3: minimize distinct positive-use patterns while preserving earlier optima. ---
+"""
+def build_pattern_use_indicators(
+    model: pulp.LpProblem,
+    problem: Problem,
+    pattern_variables: dict[Pattern, pulp.LpVariable],
+) -> dict[Pattern, pulp.LpVariable]:
+    stocks_by_id = {
+        stock.stock_id: stock
+        for stock in problem.stocks
+    }
+
+    pattern_use_indicators: dict[Pattern, pulp.LpVariable] = {}
+
+    for index, (pattern, pattern_variable) in enumerate(pattern_variables.items()):
+        indicator = pulp.LpVariable(
+            name = f"pattern_used_{index:06d}",
+            cat = pulp.LpBinary,
+        )
+
+        maximum_usage = stocks_by_id[pattern.stock_id].quantity
+
+        model.addConstraint(
+            pattern_variable <= maximum_usage * indicator,
+            name=f"link_pattern_use_upper_{index:06d}",
+        )
+
+        model.addConstraint(
+            indicator <= pattern_variable,
+            name=f"link_pattern_use_lower_{index:06d}",
+        )
+
+        pattern_use_indicators[pattern] = indicator
+
+    return pattern_use_indicators
+
+def configure_tertiary_pattern_count_stage(
+    model: pulp.LpProblem,
+    problem: Problem,
+    pattern_variables: dict[Pattern, pulp.LpVariable],
+    total_leftover: pulp.LpAffineExpression,
+    optimal_total_leftover: int,
+) -> pulp.LpAffineExpression:
+    model.addConstraint(
+        total_leftover == optimal_total_leftover,
+        name="fixed_optimal_total_leftover",
+    )
+
+    pattern_use_indicators = build_pattern_use_indicators(
+        model=model,
+        problem=problem,
+        pattern_variables=pattern_variables,
+    )
+
+    distinct_pattern_count = pulp.lpSum(
+        pattern_use_indicators.values()
+    )
+    model.setObjective(distinct_pattern_count)
+
+    return distinct_pattern_count
+
+@dataclass(frozen=True, slots=True)
+class TertiaryDistinctPatternCountResult:
+    backend_status: BackendStatus
+    optimal_distinct_pattern_count: int | None
+
+def solve_tertiary_pattern_count_stage(
+    model: pulp.LpProblem,
+    distinct_pattern_count: pulp.LpAffineExpression,
+    adapter: PulpCbcAdapter,
+    options: BackendOptions,
+) -> TertiaryDistinctPatternCountResult:
+    backend_status = adapter.solve(model, options)
+
+    if backend_status is not BackendStatus.OPTIMAL:
+        return TertiaryDistinctPatternCountResult(
+            backend_status=backend_status,
+            optimal_distinct_pattern_count=None,
+        )
+
+    raw_distinct_pattern_count = pulp.value(distinct_pattern_count)
+
+    if raw_distinct_pattern_count is None:
+        raise RuntimeError(
+            "CBC reported an optimal result without an objective value."
+        )
+
+    rounded_distinct_pattern_count = round(raw_distinct_pattern_count)
+
+    if abs(raw_distinct_pattern_count - rounded_distinct_pattern_count) > 1e-7:
+        raise RuntimeError(
+            "The optimal distinct pattern count was not integral."
+        )
+
+    return TertiaryDistinctPatternCountResult(
+        backend_status=backend_status,
+        optimal_distinct_pattern_count=rounded_distinct_pattern_count,
     )

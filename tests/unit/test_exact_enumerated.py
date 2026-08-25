@@ -6,14 +6,18 @@ from saw.backends.base import BackendOptions
 from saw.backends.exact_enumerated import (
     PrimaryStockCountResult,
     SecondaryLeftoverResult,
+    TertiaryDistinctPatternCountResult,
     add_exact_demand_constraints,
     add_exact_stock_constraints,
+    build_pattern_use_indicators,
     build_pattern_variables,
     build_primary_stock_count_model,
     build_total_leftover_expression,
     configure_secondary_leftover_stage,
+    configure_tertiary_pattern_count_stage,
     solve_primary_stock_count_stage,
     solve_secondary_leftover_stage,
+    solve_tertiary_pattern_count_stage,
 )
 from saw.backends.pulp_backend import PulpCbcAdapter
 from saw.models import BackendStatus
@@ -762,3 +766,371 @@ def test_secondary_optimization_preserves_primary_optimum() -> None:
     assert pulp.value(stock_count) == 1
     assert variables[short_stock_pattern].varValue == 1
     assert variables[long_stock_pattern].varValue == 0
+
+
+def test_builds_one_binary_use_indicator_per_pattern() -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 4),),
+        demands=(),
+    )
+    patterns = (
+        Pattern("stock-10", {"demand-4": 1}),
+        Pattern("stock-10", {"demand-6": 1}),
+    )
+    pattern_variables = build_pattern_variables(problem, patterns)
+    model = pulp.LpProblem("pattern_use_indicators")
+
+    indicators = build_pattern_use_indicators(
+        model,
+        problem,
+        pattern_variables,
+    )
+
+    assert set(indicators) == set(pattern_variables)
+    assert all(indicator.isBinary() for indicator in indicators.values())
+    assert {
+        indicator.name
+        for indicator in indicators.values()
+    } == {
+        "pattern_used_000000",
+        "pattern_used_000001",
+    }
+
+
+def test_pattern_use_indicators_are_linked_by_stock_availability() -> None:
+    problem = Problem(
+        stocks=(
+            Stock("limited-stock", "steel", 10, 2),
+            Stock("larger-stock", "steel", 10, 7),
+        ),
+        demands=(),
+    )
+    patterns = (
+        Pattern("limited-stock", {"demand-4": 1}),
+        Pattern("larger-stock", {"demand-4": 1}),
+    )
+    pattern_variables = build_pattern_variables(problem, patterns)
+    model = pulp.LpProblem("linked_pattern_use")
+    indicators = build_pattern_use_indicators(
+        model,
+        problem,
+        pattern_variables,
+    )
+    stocks_by_id = {
+        stock.stock_id: stock
+        for stock in problem.stocks
+    }
+
+    for index, (pattern, indicator) in enumerate(indicators.items()):
+        pattern_variable = pattern_variables[pattern]
+        maximum_usage = stocks_by_id[pattern.stock_id].quantity
+        upper_link = _constraint_by_name(
+            model,
+            f"link_pattern_use_upper_{index:06d}",
+        )
+        lower_link = _constraint_by_name(
+            model,
+            f"link_pattern_use_lower_{index:06d}",
+        )
+
+        assert upper_link.sense == pulp.LpConstraintLE
+        assert upper_link.get(pattern_variable, 0) == 1
+        assert upper_link.get(indicator, 0) == -maximum_usage
+        assert lower_link.sense == pulp.LpConstraintLE
+        assert lower_link.get(indicator, 0) == 1
+        assert lower_link.get(pattern_variable, 0) == -1
+
+        pattern_variable.varValue = 0
+        indicator.varValue = 0
+        assert upper_link.valid(0)
+        assert lower_link.valid(0)
+
+        pattern_variable.varValue = 1
+        indicator.varValue = 0
+        assert not upper_link.valid(0)
+
+        pattern_variable.varValue = 0
+        indicator.varValue = 1
+        assert not lower_link.valid(0)
+
+        pattern_variable.varValue = maximum_usage
+        indicator.varValue = 1
+        assert upper_link.valid(0)
+        assert lower_link.valid(0)
+
+
+def test_empty_pattern_collection_builds_no_use_indicators() -> None:
+    problem = Problem(stocks=(), demands=())
+    model = pulp.LpProblem("empty_pattern_use")
+
+    indicators = build_pattern_use_indicators(
+        model,
+        problem,
+        {},
+    )
+
+    assert indicators == {}
+    assert _model_constraints(model) == ()
+
+
+def test_distinct_pattern_objective_counts_only_positive_use() -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 5),),
+        demands=(),
+    )
+    used_pattern = Pattern("stock-10", {"demand-4": 1})
+    unused_pattern = Pattern("stock-10", {"demand-5": 1})
+    pattern_variables = build_pattern_variables(
+        problem,
+        (used_pattern, unused_pattern),
+    )
+    model = pulp.LpProblem("positive_pattern_use")
+    indicators = build_pattern_use_indicators(
+        model,
+        problem,
+        pattern_variables,
+    )
+    distinct_pattern_count = pulp.lpSum(indicators.values())
+
+    pattern_variables[used_pattern].varValue = 4
+    indicators[used_pattern].varValue = 1
+    pattern_variables[unused_pattern].varValue = 0
+    indicators[unused_pattern].varValue = 0
+
+    assert pulp.value(distinct_pattern_count) == 1
+    assert all(
+        constraint.valid(0)
+        for constraint in _model_constraints(model)
+    )
+
+
+def test_tertiary_stage_fixes_leftover_and_replaces_objective() -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 4),),
+        demands=(Demand("demand-4", "steel", 4, 3),),
+    )
+    single_piece_pattern = Pattern("stock-10", {"demand-4": 1})
+    double_piece_pattern = Pattern("stock-10", {"demand-4": 2})
+    model, pattern_variables, stock_count = build_primary_stock_count_model(
+        problem,
+        (single_piece_pattern, double_piece_pattern),
+    )
+    total_leftover = configure_secondary_leftover_stage(
+        model,
+        problem,
+        pattern_variables,
+        stock_count,
+        optimal_stock_count=2,
+    )
+
+    distinct_pattern_count = configure_tertiary_pattern_count_stage(
+        model,
+        problem,
+        pattern_variables,
+        total_leftover,
+        optimal_total_leftover=8,
+    )
+
+    fixed_stock_count = _constraint_by_name(
+        model,
+        "fixed_optimal_stock_count",
+    )
+    fixed_leftover = _constraint_by_name(
+        model,
+        "fixed_optimal_total_leftover",
+    )
+    assert fixed_stock_count.sense == pulp.LpConstraintEQ
+    assert fixed_leftover.sense == pulp.LpConstraintEQ
+    assert model.objective is distinct_pattern_count
+    assert len(distinct_pattern_count) == 2
+    assert all(
+        variable.isBinary()
+        for variable in distinct_pattern_count.keys()
+    )
+    assert all(
+        coefficient == 1
+        for coefficient in distinct_pattern_count.values()
+    )
+
+    pattern_variables[single_piece_pattern].varValue = 1
+    pattern_variables[double_piece_pattern].varValue = 1
+    assert fixed_stock_count.valid(0)
+    assert fixed_leftover.valid(0)
+
+    pattern_variables[single_piece_pattern].varValue = 0
+    pattern_variables[double_piece_pattern].varValue = 2
+    assert fixed_stock_count.valid(0)
+    assert not fixed_leftover.valid(0)
+
+
+def test_tertiary_stage_records_a_proven_optimal_pattern_count() -> None:
+    model = pulp.LpProblem("tertiary_pattern_count", pulp.LpMinimize)
+    first_indicator = pulp.LpVariable("first_used", cat=pulp.LpBinary)
+    second_indicator = pulp.LpVariable("second_used", cat=pulp.LpBinary)
+    distinct_pattern_count = pulp.lpSum(
+        (first_indicator, second_indicator)
+    )
+    first_indicator.varValue = 1
+    second_indicator.varValue = 0
+    adapter = FakeStageAdapter()
+    options = BackendOptions(time_limit_seconds=5)
+
+    result = solve_tertiary_pattern_count_stage(
+        model,
+        distinct_pattern_count,
+        adapter,
+        options,
+    )
+
+    assert result == TertiaryDistinctPatternCountResult(
+        backend_status=BackendStatus.OPTIMAL,
+        optimal_distinct_pattern_count=1,
+    )
+    assert adapter.model is model
+    assert adapter.options is options
+
+
+@pytest.mark.parametrize(
+    "backend_status",
+    [
+        BackendStatus.FEASIBLE,
+        BackendStatus.INFEASIBLE,
+        BackendStatus.LIMIT_REACHED,
+        BackendStatus.NOT_SOLVED,
+        BackendStatus.UNKNOWN,
+    ],
+)
+def test_tertiary_stage_records_no_optimum_without_an_optimality_proof(
+    backend_status: BackendStatus,
+) -> None:
+    model = pulp.LpProblem("tertiary_pattern_count", pulp.LpMinimize)
+    distinct_pattern_count = pulp.LpAffineExpression()
+
+    result = solve_tertiary_pattern_count_stage(
+        model,
+        distinct_pattern_count,
+        FakeStageAdapter(status=backend_status),
+        BackendOptions(),
+    )
+
+    assert result == TertiaryDistinctPatternCountResult(
+        backend_status=backend_status,
+        optimal_distinct_pattern_count=None,
+    )
+
+
+def test_tertiary_stage_propagates_backend_failure() -> None:
+    model = pulp.LpProblem("tertiary_pattern_count", pulp.LpMinimize)
+    distinct_pattern_count = pulp.LpAffineExpression()
+    solve_error = RuntimeError("backend failed")
+
+    with pytest.raises(RuntimeError) as captured:
+        solve_tertiary_pattern_count_stage(
+            model,
+            distinct_pattern_count,
+            FakeStageAdapter(solve_error=solve_error),
+            BackendOptions(),
+        )
+
+    assert captured.value is solve_error
+
+
+def test_tertiary_stage_rejects_a_missing_optimal_objective_value() -> None:
+    model = pulp.LpProblem("tertiary_pattern_count", pulp.LpMinimize)
+    indicator = pulp.LpVariable("pattern_used", cat=pulp.LpBinary)
+    distinct_pattern_count = pulp.lpSum((indicator,))
+
+    with pytest.raises(
+        RuntimeError,
+        match="optimal result without an objective value",
+    ):
+        solve_tertiary_pattern_count_stage(
+            model,
+            distinct_pattern_count,
+            FakeStageAdapter(),
+            BackendOptions(),
+        )
+
+
+def test_tertiary_stage_rejects_a_non_integral_pattern_count() -> None:
+    model = pulp.LpProblem("tertiary_pattern_count", pulp.LpMinimize)
+    indicator = pulp.LpVariable("pattern_used", cat=pulp.LpBinary)
+    distinct_pattern_count = pulp.lpSum((indicator,))
+    indicator.varValue = 0.5
+
+    with pytest.raises(RuntimeError, match="was not integral"):
+        solve_tertiary_pattern_count_stage(
+            model,
+            distinct_pattern_count,
+            FakeStageAdapter(),
+            BackendOptions(),
+        )
+
+
+def test_tertiary_optimization_preserves_both_earlier_optima() -> None:
+    problem = Problem(
+        stocks=(Stock("stock-11", "steel", 11, 2),),
+        demands=(
+            Demand("demand-a", "steel", 5, 2),
+            Demand("demand-b", "steel", 5, 2),
+        ),
+    )
+    mixed_pattern = Pattern(
+        "stock-11",
+        {"demand-a": 1, "demand-b": 1},
+    )
+    demand_a_pattern = Pattern("stock-11", {"demand-a": 2})
+    demand_b_pattern = Pattern("stock-11", {"demand-b": 2})
+    model, pattern_variables, stock_count = build_primary_stock_count_model(
+        problem,
+        (mixed_pattern, demand_a_pattern, demand_b_pattern),
+    )
+    adapter = PulpCbcAdapter()
+    options = BackendOptions()
+
+    primary_result = solve_primary_stock_count_stage(
+        model,
+        stock_count,
+        adapter,
+        options,
+    )
+    assert primary_result.optimal_stock_count == 2
+
+    total_leftover = configure_secondary_leftover_stage(
+        model,
+        problem,
+        pattern_variables,
+        stock_count,
+        optimal_stock_count=2,
+    )
+    secondary_result = solve_secondary_leftover_stage(
+        model,
+        total_leftover,
+        adapter,
+        options,
+    )
+    assert secondary_result.optimal_total_leftover == 2
+
+    distinct_pattern_count = configure_tertiary_pattern_count_stage(
+        model,
+        problem,
+        pattern_variables,
+        total_leftover,
+        optimal_total_leftover=2,
+    )
+    tertiary_result = solve_tertiary_pattern_count_stage(
+        model,
+        distinct_pattern_count,
+        adapter,
+        options,
+    )
+
+    assert tertiary_result == TertiaryDistinctPatternCountResult(
+        backend_status=BackendStatus.OPTIMAL,
+        optimal_distinct_pattern_count=1,
+    )
+    assert pulp.value(stock_count) == 2
+    assert pulp.value(total_leftover) == 2
+    assert pattern_variables[mixed_pattern].varValue == 2
+    assert pattern_variables[demand_a_pattern].varValue == 0
+    assert pattern_variables[demand_b_pattern].varValue == 0
