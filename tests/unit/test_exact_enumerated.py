@@ -8,7 +8,7 @@ from saw.backends.exact_enumerated import (
     SecondaryLeftoverResult,
     TertiaryDistinctPatternCountResult,
     add_exact_demand_constraints,
-    add_exact_stock_constraints,
+    add_bounded_stock_constraints,
     build_pattern_use_indicators,
     build_pattern_variables,
     build_primary_stock_count_model,
@@ -284,7 +284,7 @@ def test_adds_one_inventory_constraint_per_stock_id() -> None:
     )
     model = pulp.LpProblem("bounded_stock")
 
-    add_exact_stock_constraints(model, problem, variables)
+    add_bounded_stock_constraints(model, problem, variables)
 
     assert tuple(
         constraint.name
@@ -315,7 +315,7 @@ def test_stock_constraint_limits_usage_across_all_of_its_patterns() -> None:
         (first_pattern, second_pattern),
     )
     model = pulp.LpProblem("shared_stock_limit")
-    add_exact_stock_constraints(model, problem, variables)
+    add_bounded_stock_constraints(model, problem, variables)
     constraint = _constraint_by_name(model, "bounded_stock_000000")
 
     variables[first_pattern].varValue = 1
@@ -342,7 +342,7 @@ def test_equal_length_stock_records_remain_independently_bounded() -> None:
         (first_pattern, second_pattern),
     )
     model = pulp.LpProblem("independent_stock_limits")
-    add_exact_stock_constraints(model, problem, variables)
+    add_bounded_stock_constraints(model, problem, variables)
 
     first_constraint = _constraint_by_name(model, "bounded_stock_000000")
     second_constraint = _constraint_by_name(model, "bounded_stock_000001")

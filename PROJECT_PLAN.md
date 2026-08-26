@@ -380,9 +380,14 @@ saw/
 │       └── backends/
 │           ├── __init__.py
 │           ├── base.py
-│           ├── enumerated.py
-│           ├── column_generation.py
-│           └── pulp_backend.py
+│           ├── exact_enumerated/
+│           │   ├── __init__.py
+│           │   ├── backend.py
+│           │   ├── model.py
+│           │   ├── stages.py
+│           │   └── output.py
+│           ├── pulp_backend.py
+│           └── column_generation.py
 ├── tests/
 │   ├── unit/
 │   ├── regression/
@@ -466,9 +471,15 @@ Provides a thin command-line wrapper around the same validation, solving, serial
 
 Defines the internal solver-backend protocol, capability reporting, configuration, raw result contract, and termination semantics.
 
-### `backends/enumerated.py`
+### `backends/exact_enumerated/`
 
-Implements the complete-pattern exact solver for supported sizes. It remains in the project permanently as a production option for small problems and as the reference oracle for other backends.
+Implements the complete-pattern exact solver for supported sizes. It remains in the project permanently as a production option for small problems and as the reference oracle for other backends. Its internal modules are organized by responsibility:
+
+- `backend.py` orchestrates the complete exact-solving pipeline.
+- `model.py` builds pattern variables, constraints, and shared expressions.
+- `stages.py` keeps the three lexicographic optimization stages and their result types together.
+- `output.py` extracts candidates, builds diagnostics, and translates termination statuses.
+- `__init__.py` preserves the public `saw.backends.exact_enumerated` import surface.
 
 ### `backends/column_generation.py`
 
@@ -476,7 +487,7 @@ Implements feasibility-aware column generation and restricted integer solving. U
 
 ### `backends/pulp_backend.py`
 
-Contains the optimization-library-specific model construction, status translation, time-limit handling, and backend availability checks. This keeps PuLP or another modeling library out of the public domain models.
+Contains the PuLP/CBC adapter, including solver construction, PuLP status translation, time-limit configuration, execution, and backend availability checks. Exact-solver model construction remains inside `backends/exact_enumerated/model.py`.
 
 ## Architectural flow
 
@@ -691,4 +702,3 @@ A solver or formulation change is complete only when:
 8. Add the public `solve(...)` function and structured results.
 9. Add packaging, documentation, CI, and the JSON CLI.
 10. Begin scalable column generation only after the exact foundation is reliable.
-
