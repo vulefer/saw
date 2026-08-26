@@ -5,10 +5,25 @@ from dataclasses import dataclass
 import pulp
 
 from saw import Stock
-from saw.backends.base import BackendOptions
+from saw.backends.base import (
+    BackendOptions,
+    UnverifiedBackendResult,
+    UnverifiedCandidate,
+)
 from saw.backends.pulp_backend import PulpCbcAdapter
-from saw.models import BackendStatus, Problem
+from saw.models import (
+    BackendStatus,
+    CutPattern,
+    Diagnostics,
+    ObjectiveStage,
+    ObjectiveValue,
+    Problem,
+    TerminationReason,
+)
 from saw.patterns import Pattern
+
+
+_INTEGRALITY_TOLERANCE = 1e-7
 
 
 """this function returns a dictionary-like structure:
@@ -343,4 +358,116 @@ def solve_tertiary_pattern_count_stage(
     return TertiaryDistinctPatternCountResult(
         backend_status=backend_status,
         optimal_distinct_pattern_count=rounded_distinct_pattern_count,
+    )
+
+# converts the results to a list of CutPatterns
+def extract_positive_cut_patterns(
+    pattern_variables: dict[Pattern, pulp.LpVariable],
+) -> tuple[CutPattern, ...]:
+
+    cut_patterns: list[CutPattern] = []
+
+    for pattern, variable in sorted(
+        pattern_variables.items(),
+        key=lambda item: _pattern_sort_key(item[0]),
+    ):
+        raw_repetitions = pulp.value(variable)
+
+        if raw_repetitions is None:
+            raise RuntimeError(
+                f"Solver returned no value for pattern variable {variable.name!r}."
+            )
+
+        repetitions = round(raw_repetitions)
+
+        if abs(raw_repetitions - repetitions) > _INTEGRALITY_TOLERANCE:
+            raise RuntimeError(
+                f"Pattern variable {variable.name!r} was not integral."
+            )
+
+        if repetitions < 0:
+            raise RuntimeError(
+                f"Pattern variable {variable.name!r} was negative."
+            )
+
+        if repetitions > 0:
+            cut_patterns.append(
+                CutPattern(
+                    pattern=pattern,
+                    repetitions=repetitions,
+                )
+            )
+
+    return tuple(cut_patterns)
+
+# builds the whole UnverifiedBackendResult from the result of the solver
+def extract_backend_output(
+    pattern_variables: dict[Pattern, pulp.LpVariable],
+    primary_result: PrimaryStockCountResult,
+    secondary_result: SecondaryLeftoverResult,
+    tertiary_result: TertiaryDistinctPatternCountResult,
+    *,
+    elapsed_time: float,
+) -> UnverifiedBackendResult:
+
+    stage_results = (
+        (
+            ObjectiveStage.STOCK_PIECE_COUNT,
+            primary_result.backend_status,
+            primary_result.optimal_stock_count,
+        ),
+        (
+            ObjectiveStage.TOTAL_LEFTOVER,
+            secondary_result.backend_status,
+            secondary_result.optimal_total_leftover,
+        ),
+        (
+            ObjectiveStage.DISTINCT_PATTERN_COUNT,
+            tertiary_result.backend_status,
+            tertiary_result.optimal_distinct_pattern_count,
+        ),
+    )
+
+    for stage, backend_status, objective_value in stage_results:
+        if backend_status is not BackendStatus.OPTIMAL or objective_value is None:
+            raise RuntimeError(
+                f"Cannot extract backend output before {stage.value!r} "
+                "has a proven optimum."
+            )
+
+    stock_piece_count = primary_result.optimal_stock_count
+    total_leftover = secondary_result.optimal_total_leftover
+    distinct_pattern_count = tertiary_result.optimal_distinct_pattern_count
+
+    # The checks above narrow these values logically, while the explicit
+    # assertions make that invariant visible to static type checkers.
+    assert stock_piece_count is not None
+    assert total_leftover is not None
+    assert distinct_pattern_count is not None
+
+    candidate = UnverifiedCandidate(
+        cut_patterns=extract_positive_cut_patterns(pattern_variables),
+        objective_value=ObjectiveValue(
+            stock_piece_count=stock_piece_count,
+            total_leftover=total_leftover,
+            distinct_pattern_count=distinct_pattern_count,
+        ),
+    )
+    diagnostics = Diagnostics(
+        termination_reason=TerminationReason.COMPLETED,
+        backend_status=tertiary_result.backend_status,
+        elapsed_time=elapsed_time,
+        patterns_generated=len(pattern_variables),
+        iterations=1,
+        completed_objective_stages=tuple(
+            stage
+            for stage, _, _ in stage_results
+        ),
+        lower_bound=stock_piece_count,
+        upper_bound=stock_piece_count,
+    )
+
+    return UnverifiedBackendResult(
+        candidate=candidate,
+        diagnostics=diagnostics,
     )

@@ -1,7 +1,7 @@
 import pulp
 import pytest
 
-from saw import Demand, Problem, Stock
+from saw import CutPattern, Demand, Problem, Stock
 from saw.backends.base import BackendOptions
 from saw.backends.exact_enumerated import (
     PrimaryStockCountResult,
@@ -15,12 +15,19 @@ from saw.backends.exact_enumerated import (
     build_total_leftover_expression,
     configure_secondary_leftover_stage,
     configure_tertiary_pattern_count_stage,
+    extract_backend_output,
+    extract_positive_cut_patterns,
     solve_primary_stock_count_stage,
     solve_secondary_leftover_stage,
     solve_tertiary_pattern_count_stage,
 )
 from saw.backends.pulp_backend import PulpCbcAdapter
-from saw.models import BackendStatus
+from saw.models import (
+    BackendStatus,
+    ObjectiveStage,
+    ObjectiveValue,
+    TerminationReason,
+)
 from saw.patterns import Pattern
 
 
@@ -1134,3 +1141,145 @@ def test_tertiary_optimization_preserves_both_earlier_optima() -> None:
     assert pattern_variables[mixed_pattern].varValue == 2
     assert pattern_variables[demand_a_pattern].varValue == 0
     assert pattern_variables[demand_b_pattern].varValue == 0
+
+    backend_result = extract_backend_output(
+        pattern_variables,
+        primary_result,
+        secondary_result,
+        tertiary_result,
+        elapsed_time=0.25,
+    )
+
+    assert backend_result.candidate is not None
+    assert backend_result.candidate.cut_patterns == (
+        CutPattern(pattern=mixed_pattern, repetitions=2),
+    )
+    assert backend_result.candidate.objective_value == ObjectiveValue(
+        stock_piece_count=2,
+        total_leftover=2,
+        distinct_pattern_count=1,
+    )
+
+
+def test_extracts_only_positive_patterns_using_stable_ids() -> None:
+    problem = Problem(
+        stocks=(Stock("stable-stock-id", "steel", 12, 5),),
+        demands=(
+            Demand("stable-demand-a", "steel", 4, 3),
+            Demand("stable-demand-b", "steel", 3, 6),
+        ),
+    )
+    used_pattern = Pattern(
+        "stable-stock-id",
+        {"stable-demand-a": 1, "stable-demand-b": 2},
+    )
+    unused_pattern = Pattern(
+        "stable-stock-id",
+        {"stable-demand-a": 2},
+    )
+    pattern_variables = build_pattern_variables(
+        problem,
+        (unused_pattern, used_pattern),
+    )
+    pattern_variables[used_pattern].varValue = 3.0
+    pattern_variables[unused_pattern].varValue = 0.0
+
+    cut_patterns = extract_positive_cut_patterns(pattern_variables)
+
+    assert len(cut_patterns) == 1
+    assert cut_patterns[0].stock_id == "stable-stock-id"
+    assert cut_patterns[0].piece_counts == {
+        "stable-demand-a": 1,
+        "stable-demand-b": 2,
+    }
+    assert cut_patterns[0].repetitions == 3
+    assert isinstance(cut_patterns[0].repetitions, int)
+
+
+@pytest.mark.parametrize(
+    ("raw_repetitions", "message"),
+    [
+        (None, "returned no value"),
+        (1.5, "was not integral"),
+        (-1.0, "was negative"),
+    ],
+)
+def test_rejects_invalid_pattern_repetitions(
+    raw_repetitions: float | None,
+    message: str,
+) -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 2),),
+        demands=(Demand("demand-4", "steel", 4, 1),),
+    )
+    pattern = Pattern("stock-10", {"demand-4": 1})
+    pattern_variables = build_pattern_variables(problem, (pattern,))
+    pattern_variables[pattern].varValue = raw_repetitions
+
+    with pytest.raises(RuntimeError, match=message):
+        extract_positive_cut_patterns(pattern_variables)
+
+
+def test_backend_output_records_objectives_and_diagnostics() -> None:
+    result = extract_backend_output(
+        {},
+        PrimaryStockCountResult(BackendStatus.OPTIMAL, 0),
+        SecondaryLeftoverResult(BackendStatus.OPTIMAL, 0),
+        TertiaryDistinctPatternCountResult(BackendStatus.OPTIMAL, 0),
+        elapsed_time=1.25,
+    )
+
+    assert result.candidate is not None
+    assert result.candidate.cut_patterns == ()
+    assert result.candidate.objective_value == ObjectiveValue(0, 0, 0)
+    assert result.diagnostics.termination_reason is TerminationReason.COMPLETED
+    assert result.diagnostics.backend_status is BackendStatus.OPTIMAL
+    assert result.diagnostics.elapsed_time == 1.25
+    assert result.diagnostics.patterns_generated == 0
+    assert result.diagnostics.iterations == 1
+    assert result.diagnostics.completed_objective_stages == (
+        ObjectiveStage.STOCK_PIECE_COUNT,
+        ObjectiveStage.TOTAL_LEFTOVER,
+        ObjectiveStage.DISTINCT_PATTERN_COUNT,
+    )
+    assert result.diagnostics.lower_bound == 0
+    assert result.diagnostics.upper_bound == 0
+
+
+@pytest.mark.parametrize(
+    ("primary_result", "secondary_result", "tertiary_result", "stage"),
+    [
+        (
+            PrimaryStockCountResult(BackendStatus.NOT_SOLVED, None),
+            SecondaryLeftoverResult(BackendStatus.OPTIMAL, 0),
+            TertiaryDistinctPatternCountResult(BackendStatus.OPTIMAL, 0),
+            ObjectiveStage.STOCK_PIECE_COUNT,
+        ),
+        (
+            PrimaryStockCountResult(BackendStatus.OPTIMAL, 0),
+            SecondaryLeftoverResult(BackendStatus.LIMIT_REACHED, None),
+            TertiaryDistinctPatternCountResult(BackendStatus.OPTIMAL, 0),
+            ObjectiveStage.TOTAL_LEFTOVER,
+        ),
+        (
+            PrimaryStockCountResult(BackendStatus.OPTIMAL, 0),
+            SecondaryLeftoverResult(BackendStatus.OPTIMAL, 0),
+            TertiaryDistinctPatternCountResult(BackendStatus.FEASIBLE, None),
+            ObjectiveStage.DISTINCT_PATTERN_COUNT,
+        ),
+    ],
+)
+def test_backend_output_requires_all_three_proven_optima(
+    primary_result: PrimaryStockCountResult,
+    secondary_result: SecondaryLeftoverResult,
+    tertiary_result: TertiaryDistinctPatternCountResult,
+    stage: ObjectiveStage,
+) -> None:
+    with pytest.raises(RuntimeError, match=stage.value):
+        extract_backend_output(
+            {},
+            primary_result,
+            secondary_result,
+            tertiary_result,
+            elapsed_time=0.0,
+        )
