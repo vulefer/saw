@@ -18,12 +18,30 @@ from saw.models import (
     ObjectiveStage,
     ObjectiveValue,
     Problem,
+    SolutionStatus,
     TerminationReason,
 )
 from saw.patterns import Pattern
 
 
 _INTEGRALITY_TOLERANCE = 1e-7
+
+
+def translate_exact_backend_status(
+    backend_status: BackendStatus,
+) -> SolutionStatus:
+    return {
+        BackendStatus.OPTIMAL: SolutionStatus.OPTIMAL,
+        BackendStatus.FEASIBLE: SolutionStatus.FEASIBLE,
+        BackendStatus.INFEASIBLE: SolutionStatus.INFEASIBLE,
+        BackendStatus.LIMIT_REACHED: SolutionStatus.LIMIT,
+        BackendStatus.NOT_RUN: SolutionStatus.ERROR,
+        BackendStatus.UNBOUNDED: SolutionStatus.ERROR,
+        BackendStatus.NOT_SOLVED: SolutionStatus.ERROR,
+        BackendStatus.FAILED: SolutionStatus.ERROR,
+        BackendStatus.UNKNOWN: SolutionStatus.ERROR,
+    }.get(backend_status, SolutionStatus.ERROR)
+
 
 
 """this function returns a dictionary-like structure:

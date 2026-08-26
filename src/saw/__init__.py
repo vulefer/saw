@@ -11,6 +11,7 @@ __all__ = [
         "Demand", "Problem", "Stock", "CutPattern", "ObjectiveValue", "Diagnostics", "Solution",
         "SolutionStatus", "TerminationReason", "BackendStatus", "ObjectiveStage", "ObjectiveValue",
         "VerificationResult", "VerificationFindingCode", "VerificationFinding", "VerificationReport",
-        "SawError", "ValidationError", "ValidationErrorCode", "InternalVerificationError",
+        "SawError", "ValidationError", "ValidationErrorCode", "BackendUnavailableError",
+        "InternalVerificationError",
         "validate_problem",
         ]

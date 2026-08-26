@@ -20,12 +20,14 @@ from saw.backends.exact_enumerated import (
     solve_primary_stock_count_stage,
     solve_secondary_leftover_stage,
     solve_tertiary_pattern_count_stage,
+    translate_exact_backend_status,
 )
 from saw.backends.pulp_backend import PulpCbcAdapter
 from saw.models import (
     BackendStatus,
     ObjectiveStage,
     ObjectiveValue,
+    SolutionStatus,
     TerminationReason,
 )
 from saw.patterns import Pattern
@@ -52,6 +54,31 @@ class FakeStageAdapter:
         if self.solve_error is not None:
             raise self.solve_error
         return self.status
+
+
+@pytest.mark.parametrize(
+    ("backend_status", "solution_status"),
+    [
+        (BackendStatus.OPTIMAL, SolutionStatus.OPTIMAL),
+        (BackendStatus.FEASIBLE, SolutionStatus.FEASIBLE),
+        (BackendStatus.INFEASIBLE, SolutionStatus.INFEASIBLE),
+        (BackendStatus.LIMIT_REACHED, SolutionStatus.LIMIT),
+        (BackendStatus.NOT_RUN, SolutionStatus.ERROR),
+        (BackendStatus.UNBOUNDED, SolutionStatus.ERROR),
+        (BackendStatus.NOT_SOLVED, SolutionStatus.ERROR),
+        (BackendStatus.FAILED, SolutionStatus.ERROR),
+        (BackendStatus.UNKNOWN, SolutionStatus.ERROR),
+    ],
+)
+def test_exact_backend_statuses_are_translated_without_stronger_claims(
+    backend_status: BackendStatus,
+    solution_status: SolutionStatus,
+) -> None:
+    assert translate_exact_backend_status(backend_status) is solution_status
+
+
+def test_unrecognized_exact_backend_status_is_an_error() -> None:
+    assert translate_exact_backend_status(object()) is SolutionStatus.ERROR  # type: ignore[arg-type]
 
 
 def _model_constraints(
