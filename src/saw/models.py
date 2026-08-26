@@ -128,6 +128,7 @@ class VerificationFindingCode(str, Enum):
     UNKNOWN_DEMAND_ID = "unknown_demand_id"
     NON_POSITIVE_REPETITIONS = "non_positive_repetitions"
     EMPTY_PATTERN = "empty_pattern"
+    MALFORMED_PATTERN = "malformed_pattern"
     DUPLICATE_PATTERN = "duplicate_pattern"
     PATTERN_CAPACITY_EXCEEDED = "pattern_capacity_exceeded"
     MATERIAL_MISMATCH = "material_mismatch"

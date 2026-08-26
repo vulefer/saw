@@ -255,6 +255,7 @@ def test_verification_finding_codes_expose_stable_values() -> None:
         "unknown_demand_id",
         "non_positive_repetitions",
         "empty_pattern",
+        "malformed_pattern",
         "duplicate_pattern",
         "pattern_capacity_exceeded",
         "material_mismatch",
