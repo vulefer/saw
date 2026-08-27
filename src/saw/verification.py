@@ -22,6 +22,7 @@ def verify_solution(
     findings.extend(_check_pattern_structure(solution))
     findings.extend(_check_duplicate_patterns(solution))
     findings.extend(_check_pattern_capacity(problem, solution))
+    findings.extend(_check_material_compatibility(problem, solution))
 
     return VerificationReport(findings=tuple(findings))
 
@@ -251,6 +252,53 @@ def _check_pattern_capacity(
                         f"stock length {stock.length} by {-delta}."
                     ),
                     stock_id=stock.stock_id,
+                    pattern_index=pattern_index,
+                )
+            )
+
+    return findings
+
+def _check_material_compatibility(
+    problem: Problem,
+    solution: Solution,
+) -> list[VerificationFinding]:
+    findings: list[VerificationFinding] = []
+
+    stocks_by_id = {stock.stock_id: stock for stock in problem.stocks}
+    demands_by_id = {
+        demand.demand_id: demand for demand in problem.demands
+    }
+
+    for pattern_index, cut_pattern in enumerate(solution.cut_patterns):
+        if not isinstance(cut_pattern.stock_id, str):
+            continue
+
+        stock = stocks_by_id.get(cut_pattern.stock_id)
+        if stock is None:
+            continue
+
+        for demand_id in cut_pattern.piece_counts:
+            if not isinstance(demand_id, str):
+                continue
+
+            demand = demands_by_id.get(demand_id)
+            if demand is None:
+                continue
+
+            if demand.material_id == stock.material_id:
+                continue
+
+            findings.append(
+                VerificationFinding(
+                    code=VerificationFindingCode.MATERIAL_MISMATCH,
+                    message=(
+                        f"Demand {demand.demand_id!r} uses material "
+                        f"{demand.material_id!r}, which does not match "
+                        f"stock {stock.stock_id!r} material "
+                        f"{stock.material_id!r}."
+                    ),
+                    stock_id=stock.stock_id,
+                    demand_id=demand.demand_id,
                     pattern_index=pattern_index,
                 )
             )

@@ -33,6 +33,17 @@ def _make_problem() -> Problem:
     )
 
 
+def _make_multi_material_problem() -> Problem:
+    return Problem(
+        stocks=(Stock("stock-10", "steel", 10, 3),),
+        demands=(
+            Demand("demand-steel-6", "steel", 6, 3),
+            Demand("demand-aluminum-4", "aluminum", 4, 3),
+            Demand("demand-wood-2", "wood", 2, 3),
+        ),
+    )
+
+
 def _make_solution(*cut_patterns: CutPattern) -> Solution:
     diagnostics = Diagnostics(
         termination_reason=TerminationReason.COMPLETED,
@@ -383,3 +394,54 @@ def test_capacity_verification_does_not_use_pattern_generators(
     report = verify_solution(_make_problem(), solution)
 
     assert report.is_valid
+
+
+def test_cross_material_cut_is_reported() -> None:
+    solution = _make_solution(
+        CutPattern(
+            pattern=Pattern("stock-10", {"demand-aluminum-4": 1}),
+            repetitions=1,
+        )
+    )
+
+    report = verify_solution(_make_multi_material_problem(), solution)
+
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.code is VerificationFindingCode.MATERIAL_MISMATCH
+    assert finding.pattern_index == 0
+    assert finding.stock_id == "stock-10"
+    assert finding.demand_id == "demand-aluminum-4"
+    assert "'aluminum'" in finding.message
+    assert "'steel'" in finding.message
+
+
+def test_every_material_mismatch_is_reported() -> None:
+    solution = _make_solution(
+        CutPattern(
+            pattern=Pattern(
+                "stock-10",
+                {
+                    "demand-aluminum-4": 1,
+                    "demand-wood-2": 1,
+                },
+            ),
+            repetitions=1,
+        )
+    )
+
+    report = verify_solution(_make_multi_material_problem(), solution)
+
+    assert [finding.code for finding in report.findings] == [
+        VerificationFindingCode.MATERIAL_MISMATCH,
+        VerificationFindingCode.MATERIAL_MISMATCH,
+    ]
+    assert [finding.pattern_index for finding in report.findings] == [0, 0]
+    assert [finding.stock_id for finding in report.findings] == [
+        "stock-10",
+        "stock-10",
+    ]
+    assert [finding.demand_id for finding in report.findings] == [
+        "demand-aluminum-4",
+        "demand-wood-2",
+    ]
