@@ -75,16 +75,17 @@ def _verify_without_demand_production(
     solution: Solution,
 ) -> VerificationReport:
     """Keep checks from earlier verification stages independently testable."""
-    demand_production_codes = {
+    later_verification_codes = {
         VerificationFindingCode.DEMAND_UNDERPRODUCED,
         VerificationFindingCode.DEMAND_OVERPRODUCED,
+        VerificationFindingCode.OBJECTIVE_MISMATCH,
     }
     report = verify_solution(problem, solution)
     return VerificationReport(
         findings=tuple(
             finding
             for finding in report.findings
-            if finding.code not in demand_production_codes
+            if finding.code not in later_verification_codes
         )
     )
 
@@ -624,3 +625,141 @@ def test_verify_solution_checks_exact_demand_production() -> None:
     assert VerificationFindingCode.DEMAND_UNDERPRODUCED in {
         finding.code for finding in report.findings
     }
+
+
+def test_stock_count_uses_only_positive_integer_repetitions() -> None:
+    solution = _make_solution(
+        CutPattern(Pattern("stock-10", {"demand-6": 1}), repetitions=3),
+        CutPattern(Pattern("stock-10", {"demand-4": 1}), repetitions=0),
+        CutPattern(Pattern("stock-12", {"demand-4": 1}), repetitions=-2),
+        CutPattern(
+            Pattern("stock-12", {"demand-6": 1}),
+            repetitions=1.5,  # type: ignore[arg-type]
+        ),
+    )
+
+    assert verification_module._calculate_stock_count(solution) == 3
+
+
+def test_leftover_follows_the_specification_for_every_pattern_use() -> None:
+    solution = _make_solution(
+        CutPattern(Pattern("stock-10", {"demand-6": 1}), repetitions=2),
+        CutPattern(Pattern("stock-12", {"demand-4": 1}), repetitions=1),
+        CutPattern(Pattern("stock-12", {"demand-6": 1}), repetitions=0),
+    )
+
+    assert verification_module._calculate_leftover(
+        _make_problem(),
+        solution,
+    ) == 16
+
+
+def test_distinct_count_uses_canonical_positive_pattern_identity() -> None:
+    solution = _make_solution(
+        CutPattern(
+            Pattern("stock-10", {"demand-6": 1, "demand-4": 1}),
+            repetitions=1,
+        ),
+        CutPattern(
+            Pattern(
+                "stock-10",
+                {"demand-4": 1, "unused": 0, "demand-6": 1},
+            ),
+            repetitions=2,
+        ),
+        CutPattern(
+            Pattern("stock-12", {"demand-6": 1, "demand-4": 1}),
+            repetitions=1,
+        ),
+        CutPattern(
+            Pattern("stock-12", {"demand-4": 2}),
+            repetitions=0,
+        ),
+    )
+
+    assert verification_module.calculate_distinct_pattern_count(solution) == 2
+
+
+def test_every_mismatched_reported_objective_component_is_reported() -> None:
+    original = _make_solution(
+        CutPattern(
+            Pattern("stock-10", {"demand-6": 1, "demand-4": 1}),
+            repetitions=3,
+        )
+    )
+    solution = Solution(
+        solution_status=original.solution_status,
+        cut_patterns=original.cut_patterns,
+        objective_value=ObjectiveValue(99, 98, 97),
+        diagnostics=original.diagnostics,
+    )
+
+    findings = verification_module._check_objective_components(
+        _make_problem(),
+        solution,
+    )
+
+    assert [finding.code for finding in findings] == [
+        VerificationFindingCode.OBJECTIVE_MISMATCH,
+        VerificationFindingCode.OBJECTIVE_MISMATCH,
+        VerificationFindingCode.OBJECTIVE_MISMATCH,
+    ]
+    assert "'stock_piece_count'" in findings[0].message
+    assert "'total_leftover'" in findings[1].message
+    assert "'distinct_pattern_count'" in findings[2].message
+
+
+def test_correct_objective_components_add_no_findings() -> None:
+    solution = _make_solution(
+        CutPattern(
+            Pattern("stock-10", {"demand-6": 1, "demand-4": 1}),
+            repetitions=3,
+        )
+    )
+
+    report = verify_solution(_make_problem(), solution)
+
+    assert report.is_valid
+
+
+def test_missing_objective_value_adds_no_objective_finding() -> None:
+    original = _make_solution()
+    solution = Solution(
+        solution_status=original.solution_status,
+        cut_patterns=original.cut_patterns,
+        objective_value=None,
+        diagnostics=original.diagnostics,
+    )
+
+    assert verification_module._check_objective_components(
+        _make_problem(),
+        solution,
+    ) == []
+
+
+def test_boolean_reported_objective_is_not_accepted_as_integer() -> None:
+    original = _make_solution(
+        CutPattern(
+            Pattern("stock-10", {"demand-6": 1, "demand-4": 1}),
+            repetitions=1,
+        )
+    )
+    solution = Solution(
+        solution_status=original.solution_status,
+        cut_patterns=original.cut_patterns,
+        objective_value=ObjectiveValue(
+            stock_piece_count=True,  # type: ignore[arg-type]
+            total_leftover=0,
+            distinct_pattern_count=1,
+        ),
+        diagnostics=original.diagnostics,
+    )
+
+    findings = verification_module._check_objective_components(
+        _make_problem(),
+        solution,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].code is VerificationFindingCode.OBJECTIVE_MISMATCH
+    assert "'stock_piece_count'" in findings[0].message

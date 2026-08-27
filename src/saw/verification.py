@@ -25,6 +25,7 @@ def verify_solution(
     findings.extend(_check_material_compatibility(problem, solution))
     findings.extend(_check_bounded_stock_consumption(problem, solution))
     findings.extend(_check_exact_demand_production(problem, solution))
+    findings.extend(_check_objective_components(problem, solution))
 
     return VerificationReport(findings=tuple(findings))
 
@@ -407,6 +408,117 @@ def _check_exact_demand_production(
                     f"{produced_quantity} ({comparison})."
                 ),
                 demand_id=demand.demand_id,
+            )
+        )
+
+    return findings
+
+
+def _has_positive_repetitions(cut_pattern: object) -> bool:
+    repetitions = getattr(cut_pattern, "repetitions", None)
+    return (
+        isinstance(repetitions, int)
+        and not isinstance(repetitions, bool)
+        and repetitions > 0
+    )
+
+
+def _calculate_stock_count(solution: Solution) -> int:
+    return sum(
+        cut_pattern.repetitions
+        for cut_pattern in solution.cut_patterns
+        if _has_positive_repetitions(cut_pattern)
+    )
+
+
+def _calculate_leftover(problem: Problem, solution: Solution) -> int:
+    stocks_by_id = {stock.stock_id: stock for stock in problem.stocks}
+    demands_by_id = {
+        demand.demand_id: demand for demand in problem.demands
+    }
+    total_leftover = 0
+
+    for cut_pattern in solution.cut_patterns:
+        if not _has_positive_repetitions(cut_pattern):
+            continue
+
+        if not isinstance(cut_pattern.stock_id, str):
+            continue
+        stock = stocks_by_id.get(cut_pattern.stock_id)
+        if stock is None or any(
+            not isinstance(demand_id, str)
+            or demand_id not in demands_by_id
+            or not isinstance(piece_count, int)
+            or isinstance(piece_count, bool)
+            for demand_id, piece_count in cut_pattern.piece_counts.items()
+        ):
+            # Reference and structure checks report patterns whose leftover
+            # cannot be independently evaluated.
+            continue
+
+        used_length = _calculate_used_length(
+            cut_pattern.piece_counts,
+            demands_by_id,
+        )
+        total_leftover += (
+            stock.length - used_length
+        ) * cut_pattern.repetitions
+
+    return total_leftover
+
+
+def calculate_distinct_pattern_count(solution: Solution) -> int:
+    patterns: set[Pattern] = set()
+
+    for cut_pattern in solution.cut_patterns:
+        if not _has_positive_repetitions(cut_pattern):
+            continue
+
+        try:
+            patterns.add(cut_pattern.pattern)
+        except TypeError:
+            # Pattern structure validation reports unhashable identities.
+            continue
+
+    return len(patterns)
+
+
+def _check_objective_components(
+    problem: Problem,
+    solution: Solution,
+) -> list[VerificationFinding]:
+    findings: list[VerificationFinding] = []
+
+    reported = solution.objective_value
+    if reported is None:
+        return findings
+
+    recomputed_components = (
+        ("stock_piece_count", _calculate_stock_count(solution)),
+        ("total_leftover", _calculate_leftover(problem, solution)),
+        (
+            "distinct_pattern_count",
+            calculate_distinct_pattern_count(solution),
+        ),
+    )
+
+    for component_name, recomputed_value in recomputed_components:
+        reported_value = getattr(reported, component_name)
+        if (
+            isinstance(reported_value, int)
+            and not isinstance(reported_value, bool)
+            and reported_value == recomputed_value
+        ):
+            continue
+
+        findings.append(
+            VerificationFinding(
+                code=VerificationFindingCode.OBJECTIVE_MISMATCH,
+                message=(
+                    f"Reported objective {component_name!r} is "
+                    f"{reported_value}, but the independently recomputed "
+                    f"value is {recomputed_value}."
+                ),
             )
         )
 
