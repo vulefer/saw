@@ -1,22 +1,56 @@
-"""public package interface for saw"""
+"""The supported public interface for :mod:`saw`."""
 
-from saw.models import (Demand, Problem, Stock, CutPattern, ObjectiveValue, Diagnostics, Solution, SolutionStatus,
-                        TerminationReason, BackendStatus, ObjectiveStage, ObjectiveValue, VerificationResult,
-                        VerificationFindingCode, VerificationFinding, VerificationReport)
-from saw.exceptions import (SawError, ValidationError, ValidationErrorCode,
-                            BackendUnavailableError, InternalVerificationError)
+from saw.exceptions import (
+    BackendUnavailableError,
+    InternalVerificationError,
+    SawError,
+    ValidationError,
+    ValidationErrorCode,
+)
+from saw.models import (
+    BackendStatus,
+    CutPattern,
+    Demand,
+    Diagnostics,
+    ObjectiveStage,
+    ObjectiveValue,
+    Problem,
+    Solution,
+    SolutionStatus,
+    Stock,
+    TerminationReason,
+    VerificationFinding,
+    VerificationFindingCode,
+    VerificationReport,
+    VerificationResult,
+)
+from saw.solve import SolveOptions, solve
 from saw.validation import validate_problem
 from saw.verification import verify_solution
-from saw.solve import SolveOptions, solve
 
-__all__ = [
-        "Demand", "Problem", "Stock", "CutPattern", "ObjectiveValue", "Diagnostics", "Solution",
-        "SolutionStatus", "TerminationReason", "BackendStatus", "ObjectiveStage", "ObjectiveValue",
-        "VerificationResult", "VerificationFindingCode", "VerificationFinding", "VerificationReport",
-        "SawError", "ValidationError", "ValidationErrorCode", "BackendUnavailableError",
-        "InternalVerificationError",
-        "validate_problem",
-        "verify_solution",
-        "SolveOptions",
-        "solve",
-        ]
+__all__ = (
+    "BackendStatus",
+    "BackendUnavailableError",
+    "CutPattern",
+    "Demand",
+    "Diagnostics",
+    "InternalVerificationError",
+    "ObjectiveStage",
+    "ObjectiveValue",
+    "Problem",
+    "SawError",
+    "Solution",
+    "SolutionStatus",
+    "SolveOptions",
+    "Stock",
+    "TerminationReason",
+    "ValidationError",
+    "ValidationErrorCode",
+    "VerificationFinding",
+    "VerificationFindingCode",
+    "VerificationReport",
+    "VerificationResult",
+    "solve",
+    "validate_problem",
+    "verify_solution",
+)
