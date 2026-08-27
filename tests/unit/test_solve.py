@@ -14,7 +14,11 @@ from saw.backends.base import (
     UnverifiedBackendResult,
     UnverifiedCandidate,
 )
-from saw.exceptions import BackendUnavailableError, ValidationError
+from saw.exceptions import (
+    BackendUnavailableError,
+    InternalVerificationError,
+    ValidationError,
+)
 from saw.models import (
     BackendStatus,
     Diagnostics,
@@ -210,6 +214,93 @@ def test_expected_backend_outcomes_return_structured_solutions(
     assert result.solution_status is solution_status
     assert result.diagnostics is diagnostics
     assert (result.objective_value is not None) is has_candidate
+
+
+@pytest.mark.parametrize(
+    "backend_status",
+    [
+        BackendStatus.OPTIMAL,
+        BackendStatus.FEASIBLE,
+        BackendStatus.LIMIT_REACHED,
+    ],
+)
+def test_feasible_backend_outputs_have_verification_reports(
+    monkeypatch: pytest.MonkeyPatch,
+    backend_status: BackendStatus,
+) -> None:
+    problem = Problem(stocks=(), demands=())
+    backend = RecordingBackend(_empty_candidate_result(backend_status))
+    _install_backend(monkeypatch, "exact_enumerated", backend)
+
+    result = solve(problem)
+
+    assert result.verification_report is not None
+    assert result.verification_report.is_valid
+
+
+@pytest.mark.parametrize(
+    "backend_status",
+    [
+        BackendStatus.OPTIMAL,
+        BackendStatus.FEASIBLE,
+        BackendStatus.LIMIT_REACHED,
+    ],
+)
+def test_invalid_feasible_backend_outputs_raise_internal_error(
+    monkeypatch: pytest.MonkeyPatch,
+    backend_status: BackendStatus,
+) -> None:
+    problem = Problem(
+        stocks=(Stock("stock", "steel", 10, 1),),
+        demands=(Demand("demand", "steel", 5, 1),),
+    )
+    backend = RecordingBackend(_empty_candidate_result(backend_status))
+    _install_backend(monkeypatch, "exact_enumerated", backend)
+
+    with pytest.raises(
+        InternalVerificationError,
+        match="demand_underproduced",
+    ):
+        solve(problem)
+
+
+@pytest.mark.parametrize(
+    "backend_status",
+    [BackendStatus.OPTIMAL, BackendStatus.FEASIBLE],
+)
+def test_feasible_status_without_candidate_raises_internal_error(
+    monkeypatch: pytest.MonkeyPatch,
+    backend_status: BackendStatus,
+) -> None:
+    problem = Problem(stocks=(), demands=())
+    backend = RecordingBackend(
+        UnverifiedBackendResult(None, _diagnostics(backend_status))
+    )
+    _install_backend(monkeypatch, "exact_enumerated", backend)
+
+    with pytest.raises(
+        InternalVerificationError,
+        match="without a candidate",
+    ):
+        solve(problem)
+
+
+def test_limit_without_candidate_has_no_verification_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    problem = Problem(stocks=(), demands=())
+    backend = RecordingBackend(
+        UnverifiedBackendResult(
+            None,
+            _diagnostics(BackendStatus.LIMIT_REACHED),
+        )
+    )
+    _install_backend(monkeypatch, "exact_enumerated", backend)
+
+    result = solve(problem)
+
+    assert result.solution_status is SolutionStatus.LIMIT
+    assert result.verification_report is None
 
 
 def test_unavailable_backend_raises_the_documented_exception(

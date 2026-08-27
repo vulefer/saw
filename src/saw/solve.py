@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from saw.backends.base import (
     BackendOptions,
@@ -10,7 +10,7 @@ from saw.backends.base import (
     translate_backend_status,
 )
 from saw.backends.exact_enumerated.backend import ExactEnumeratedBackend
-from saw.exceptions import BackendUnavailableError
+from saw.exceptions import BackendUnavailableError, InternalVerificationError
 from saw.models import (
     BackendStatus,
     Diagnostics,
@@ -20,6 +20,7 @@ from saw.models import (
     TerminationReason,
 )
 from saw.validation import validate_problem
+from saw.verification import verify_solution
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,4 +117,43 @@ def solve(
         return _unsupported_solution()
 
     result = backend.solve(problem, backend_options)
-    return _to_public_solution(result)
+    unverified_solution = _to_public_solution(result)
+
+    backend_status = result.diagnostics.backend_status
+    statuses_requiring_candidate = {
+        BackendStatus.OPTIMAL,
+        BackendStatus.FEASIBLE,
+    }
+    statuses_requiring_verification = {
+        *statuses_requiring_candidate,
+        BackendStatus.LIMIT_REACHED,
+    }
+
+    if (
+        backend_status in statuses_requiring_candidate
+        and result.candidate is None
+    ):
+        raise InternalVerificationError(
+            f"Backend reported {backend_status.value!r} without a candidate."
+        )
+
+    if (
+        result.candidate is None
+        or backend_status not in statuses_requiring_verification
+    ):
+        return unverified_solution
+
+    verification_report = verify_solution(problem, unverified_solution)
+    if not verification_report.is_valid:
+        finding_codes = ", ".join(
+            finding.code.value for finding in verification_report.findings
+        )
+        raise InternalVerificationError(
+            "The backend result failed independent verification: "
+            f"{finding_codes}."
+        )
+
+    return replace(
+        unverified_solution,
+        verification_report=verification_report,
+    )

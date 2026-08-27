@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
 from collections.abc import Mapping
@@ -113,6 +115,7 @@ class Solution:
     cut_patterns: tuple[CutPattern, ...]
     objective_value: ObjectiveValue | None
     diagnostics: Diagnostics
+    verification_report: VerificationReport | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cut_patterns", tuple(self.cut_patterns))
