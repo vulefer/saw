@@ -2,11 +2,13 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from saw.models import (
+    BackendStatus,
     CutPattern,
     Diagnostics,
     ObjectiveStage,
     ObjectiveValue,
     Problem,
+    SolutionStatus,
 )
 
 
@@ -66,6 +68,24 @@ class UnverifiedCandidate:
 class UnverifiedBackendResult:
     candidate: UnverifiedCandidate | None
     diagnostics: Diagnostics
+
+
+def translate_backend_status(
+    backend_status: BackendStatus,
+) -> SolutionStatus:
+    """Translate normalized backend outcomes into public solution statuses."""
+
+    return {
+        BackendStatus.OPTIMAL: SolutionStatus.OPTIMAL,
+        BackendStatus.FEASIBLE: SolutionStatus.FEASIBLE,
+        BackendStatus.INFEASIBLE: SolutionStatus.INFEASIBLE,
+        BackendStatus.LIMIT_REACHED: SolutionStatus.LIMIT,
+        BackendStatus.NOT_RUN: SolutionStatus.ERROR,
+        BackendStatus.UNBOUNDED: SolutionStatus.ERROR,
+        BackendStatus.NOT_SOLVED: SolutionStatus.ERROR,
+        BackendStatus.FAILED: SolutionStatus.ERROR,
+        BackendStatus.UNKNOWN: SolutionStatus.ERROR,
+    }.get(backend_status, SolutionStatus.ERROR)
 
 
 # interface for backend classes (strategy pattern)

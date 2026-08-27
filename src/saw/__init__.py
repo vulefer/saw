@@ -7,6 +7,7 @@ from saw.exceptions import (SawError, ValidationError, ValidationErrorCode,
                             BackendUnavailableError, InternalVerificationError)
 from saw.validation import validate_problem
 from saw.verification import verify_solution
+from saw.solve import SolveOptions, solve
 
 __all__ = [
         "Demand", "Problem", "Stock", "CutPattern", "ObjectiveValue", "Diagnostics", "Solution",
@@ -16,4 +17,6 @@ __all__ = [
         "InternalVerificationError",
         "validate_problem",
         "verify_solution",
+        "SolveOptions",
+        "solve",
         ]

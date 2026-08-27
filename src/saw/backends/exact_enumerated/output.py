@@ -5,6 +5,7 @@ import pulp
 from saw.backends.base import (
     UnverifiedBackendResult,
     UnverifiedCandidate,
+    translate_backend_status,
 )
 from saw.backends.exact_enumerated.model import pattern_sort_key
 from saw.backends.exact_enumerated.stages import (
@@ -18,6 +19,7 @@ from saw.models import (
     Diagnostics,
     ObjectiveStage,
     ObjectiveValue,
+    Problem,
     SolutionStatus,
     TerminationReason,
 )
@@ -30,17 +32,9 @@ _INTEGRALITY_TOLERANCE = 1e-7
 def translate_exact_backend_status(
     backend_status: BackendStatus,
 ) -> SolutionStatus:
-    return {
-        BackendStatus.OPTIMAL: SolutionStatus.OPTIMAL,
-        BackendStatus.FEASIBLE: SolutionStatus.FEASIBLE,
-        BackendStatus.INFEASIBLE: SolutionStatus.INFEASIBLE,
-        BackendStatus.LIMIT_REACHED: SolutionStatus.LIMIT,
-        BackendStatus.NOT_RUN: SolutionStatus.ERROR,
-        BackendStatus.UNBOUNDED: SolutionStatus.ERROR,
-        BackendStatus.NOT_SOLVED: SolutionStatus.ERROR,
-        BackendStatus.FAILED: SolutionStatus.ERROR,
-        BackendStatus.UNKNOWN: SolutionStatus.ERROR,
-    }.get(backend_status, SolutionStatus.ERROR)
+    """Backward-compatible exact-backend status translation."""
+
+    return translate_backend_status(backend_status)
 
 # constructs a list of CutPattern instances from the result of the optimization
 def extract_positive_cut_patterns(
@@ -80,6 +74,37 @@ def extract_positive_cut_patterns(
             )
 
     return tuple(cut_patterns)
+
+
+def extract_current_candidate(
+    problem: Problem,
+    pattern_variables: dict[Pattern, pulp.LpVariable],
+) -> UnverifiedCandidate:
+    cut_patterns = extract_positive_cut_patterns(pattern_variables)
+    stocks_by_id = {stock.stock_id: stock for stock in problem.stocks}
+    demands_by_id = {demand.demand_id: demand for demand in problem.demands}
+
+    total_leftover = 0
+    for cut_pattern in cut_patterns:
+        stock = stocks_by_id[cut_pattern.stock_id]
+        used_length = sum(
+            demands_by_id[demand_id].length * count
+            for demand_id, count in cut_pattern.piece_counts.items()
+        )
+        total_leftover += (
+            stock.length - used_length
+        ) * cut_pattern.repetitions
+
+    return UnverifiedCandidate(
+        cut_patterns=cut_patterns,
+        objective_value=ObjectiveValue(
+            stock_piece_count=sum(
+                cut_pattern.repetitions for cut_pattern in cut_patterns
+            ),
+            total_leftover=total_leftover,
+            distinct_pattern_count=len(cut_patterns),
+        ),
+    )
 
 # constructs the whole UnverifiedBackendResult instance from the result of the optimization
 def extract_backend_output(

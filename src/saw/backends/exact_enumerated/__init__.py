@@ -6,6 +6,7 @@ responsibility.
 """
 
 from saw.backends.exact_enumerated.backend import (
+    ExactEnumeratedBackend,
     solve_exact_enumerated_pipeline,
 )
 from saw.backends.exact_enumerated.model import (
@@ -36,6 +37,7 @@ __all__ = [
     "PrimaryStockCountResult",
     "SecondaryLeftoverResult",
     "TertiaryDistinctPatternCountResult",
+    "ExactEnumeratedBackend",
     "add_exact_demand_constraints",
     "add_bounded_stock_constraints",
     "build_pattern_use_indicators",
