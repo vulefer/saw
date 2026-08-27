@@ -15,6 +15,7 @@ from saw.models import (
     Stock,
     TerminationReason,
     VerificationFindingCode,
+    VerificationReport,
 )
 from saw.patterns import Pattern
 from saw.verification import verify_solution
@@ -69,6 +70,25 @@ def _make_solution(*cut_patterns: CutPattern) -> Solution:
     )
 
 
+def _verify_without_demand_production(
+    problem: Problem,
+    solution: Solution,
+) -> VerificationReport:
+    """Keep checks from earlier verification stages independently testable."""
+    demand_production_codes = {
+        VerificationFindingCode.DEMAND_UNDERPRODUCED,
+        VerificationFindingCode.DEMAND_OVERPRODUCED,
+    }
+    report = verify_solution(problem, solution)
+    return VerificationReport(
+        findings=tuple(
+            finding
+            for finding in report.findings
+            if finding.code not in demand_production_codes
+        )
+    )
+
+
 def test_valid_solution_structure_has_no_findings() -> None:
     solution = _make_solution(
         CutPattern(
@@ -80,7 +100,7 @@ def test_valid_solution_structure_has_no_findings() -> None:
         )
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert report.is_valid
     assert report.findings == ()
@@ -98,7 +118,7 @@ def test_unknown_stock_and_demand_ids_are_reported_together() -> None:
         )
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert [finding.code for finding in report.findings] == [
         VerificationFindingCode.UNKNOWN_STOCK_ID,
@@ -119,7 +139,7 @@ def test_invalid_repetition_counts_are_reported(repetitions: object) -> None:
         )
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert len(report.findings) == 1
     assert report.findings[0].code is (
@@ -138,7 +158,7 @@ def test_empty_patterns_are_reported(piece_counts: dict[str, int]) -> None:
         )
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert len(report.findings) == 1
     assert report.findings[0].code is VerificationFindingCode.EMPTY_PATTERN
@@ -166,7 +186,7 @@ def test_malformed_piece_counts_are_reported(
         )
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert len(report.findings) == 1
     assert report.findings[0].code is VerificationFindingCode.MALFORMED_PATTERN
@@ -189,7 +209,7 @@ def test_malformed_pattern_ids_are_reported_without_crashing(
 ) -> None:
     solution = _make_solution(CutPattern(pattern=pattern, repetitions=1))
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert len(report.findings) == 1
     assert report.findings[0].code is VerificationFindingCode.MALFORMED_PATTERN
@@ -214,7 +234,7 @@ def test_equivalent_canonical_patterns_are_reported_as_duplicates() -> None:
         ),
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert len(report.findings) == 1
     finding = report.findings[0]
@@ -232,7 +252,7 @@ def test_every_duplicate_after_the_first_is_reported() -> None:
         CutPattern(pattern=pattern, repetitions=1),
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert [finding.code for finding in report.findings] == [
         VerificationFindingCode.DUPLICATE_PATTERN,
@@ -253,7 +273,7 @@ def test_same_piece_counts_for_different_stocks_are_not_duplicates() -> None:
         ),
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert report.is_valid
     assert report.findings == ()
@@ -267,7 +287,7 @@ def test_pattern_with_unused_capacity_is_accepted() -> None:
         )
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert report.is_valid
     assert report.findings == ()
@@ -284,7 +304,7 @@ def test_pattern_that_exactly_fills_stock_is_accepted() -> None:
         )
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert report.is_valid
     assert report.findings == ()
@@ -300,7 +320,7 @@ def test_pattern_capacity_uses_demand_lengths_and_piece_counts() -> None:
         )
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert report.is_valid
     assert report.findings == ()
@@ -314,7 +334,7 @@ def test_over_capacity_pattern_is_reported() -> None:
         )
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert len(report.findings) == 1
     finding = report.findings[0]
@@ -334,7 +354,7 @@ def test_pattern_capacity_is_checked_per_use_not_across_repetitions() -> None:
         )
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert report.is_valid
     assert report.findings == ()
@@ -355,7 +375,7 @@ def test_malformed_pattern_does_not_prevent_other_capacity_checks() -> None:
         ),
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert [finding.code for finding in report.findings] == [
         VerificationFindingCode.MALFORMED_PATTERN,
@@ -391,7 +411,7 @@ def test_capacity_verification_does_not_use_pattern_generators(
         )
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert report.is_valid
 
@@ -404,7 +424,10 @@ def test_cross_material_cut_is_reported() -> None:
         )
     )
 
-    report = verify_solution(_make_multi_material_problem(), solution)
+    report = _verify_without_demand_production(
+        _make_multi_material_problem(),
+        solution,
+    )
 
     assert len(report.findings) == 1
     finding = report.findings[0]
@@ -430,7 +453,10 @@ def test_every_material_mismatch_is_reported() -> None:
         )
     )
 
-    report = verify_solution(_make_multi_material_problem(), solution)
+    report = _verify_without_demand_production(
+        _make_multi_material_problem(),
+        solution,
+    )
 
     assert [finding.code for finding in report.findings] == [
         VerificationFindingCode.MATERIAL_MISMATCH,
@@ -459,7 +485,7 @@ def test_stock_usage_is_aggregated_across_patterns() -> None:
         ),
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert len(report.findings) == 1
     finding = report.findings[0]
@@ -483,7 +509,118 @@ def test_stock_usage_is_aggregated_separately_by_stock_id() -> None:
         ),
     )
 
-    report = verify_solution(_make_problem(), solution)
+    report = _verify_without_demand_production(_make_problem(), solution)
 
     assert report.is_valid
     assert report.findings == ()
+
+
+def test_exact_demand_production_accepts_aggregated_pattern_totals() -> None:
+    solution = _make_solution(
+        CutPattern(
+            pattern=Pattern(
+                "stock-10",
+                {"demand-6": 1, "demand-4": 1},
+            ),
+            repetitions=1,
+        ),
+        CutPattern(
+            pattern=Pattern(
+                "stock-12",
+                {"demand-6": 1, "demand-4": 1},
+            ),
+            repetitions=2,
+        ),
+    )
+
+    findings = verification_module._check_exact_demand_production(
+        _make_problem(),
+        solution,
+    )
+
+    assert findings == []
+
+
+def test_underproduced_demand_is_reported() -> None:
+    solution = _make_solution(
+        CutPattern(
+            pattern=Pattern("stock-10", {"demand-6": 1}),
+            repetitions=3,
+        )
+    )
+
+    findings = verification_module._check_exact_demand_production(
+        _make_problem(),
+        solution,
+    )
+
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding.code is VerificationFindingCode.DEMAND_UNDERPRODUCED
+    assert finding.demand_id == "demand-4"
+    assert finding.pattern_index is None
+    assert "requires quantity 3" in finding.message
+    assert "patterns produce 0" in finding.message
+    assert "underproduced by 3" in finding.message
+
+
+def test_overproduced_demand_is_reported() -> None:
+    solution = _make_solution(
+        CutPattern(
+            pattern=Pattern(
+                "stock-10",
+                {"demand-6": 1, "demand-4": 1},
+            ),
+            repetitions=4,
+        )
+    )
+
+    findings = verification_module._check_exact_demand_production(
+        _make_problem(),
+        solution,
+    )
+
+    assert [finding.code for finding in findings] == [
+        VerificationFindingCode.DEMAND_OVERPRODUCED,
+        VerificationFindingCode.DEMAND_OVERPRODUCED,
+    ]
+    assert [finding.demand_id for finding in findings] == [
+        "demand-6",
+        "demand-4",
+    ]
+    assert all(
+        "requires quantity 3" in finding.message for finding in findings
+    )
+    assert all("patterns produce 4" in finding.message for finding in findings)
+    assert all("overproduced by 1" in finding.message for finding in findings)
+
+
+def test_every_demand_is_checked_when_no_pieces_are_produced() -> None:
+    findings = verification_module._check_exact_demand_production(
+        _make_problem(),
+        _make_solution(),
+    )
+
+    assert [finding.code for finding in findings] == [
+        VerificationFindingCode.DEMAND_UNDERPRODUCED,
+        VerificationFindingCode.DEMAND_UNDERPRODUCED,
+    ]
+    assert [finding.demand_id for finding in findings] == [
+        "demand-6",
+        "demand-4",
+    ]
+
+
+def test_verify_solution_checks_exact_demand_production() -> None:
+    solution = _make_solution(
+        CutPattern(
+            pattern=Pattern("stock-10", {"demand-6": 1}),
+            repetitions=3,
+        )
+    )
+
+    report = verify_solution(_make_problem(), solution)
+
+    assert VerificationFindingCode.DEMAND_UNDERPRODUCED in {
+        finding.code for finding in report.findings
+    }

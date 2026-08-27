@@ -24,6 +24,7 @@ def verify_solution(
     findings.extend(_check_pattern_capacity(problem, solution))
     findings.extend(_check_material_compatibility(problem, solution))
     findings.extend(_check_bounded_stock_consumption(problem, solution))
+    findings.extend(_check_exact_demand_production(problem, solution))
 
     return VerificationReport(findings=tuple(findings))
 
@@ -346,6 +347,66 @@ def _check_bounded_stock_consumption(
                     f"{stock.quantity} by {used_quantity - stock.quantity}."
                 ),
                 stock_id=stock.stock_id,
+            )
+        )
+
+    return findings
+
+
+def _check_exact_demand_production(
+    problem: Problem,
+    solution: Solution,
+) -> list[VerificationFinding]:
+    findings: list[VerificationFinding] = []
+    demand_by_id = {demand.demand_id: demand for demand in problem.demands}
+    produced_quantities: dict[str, int] = {
+        demand.demand_id: 0 for demand in problem.demands
+    }
+
+    for cut_pattern in solution.cut_patterns:
+        repetitions = cut_pattern.repetitions
+        if (
+            not isinstance(repetitions, int)
+            or isinstance(repetitions, bool)
+            or repetitions <= 0
+        ):
+            continue
+
+        for demand_id, piece_count in cut_pattern.piece_counts.items():
+            if not isinstance(demand_id, str) or demand_id not in demand_by_id:
+                continue
+            if (
+                not isinstance(piece_count, int)
+                or isinstance(piece_count, bool)
+                or piece_count <= 0
+            ):
+                continue
+
+            produced_quantities[demand_id] += piece_count * repetitions
+
+    for demand in problem.demands:
+        produced_quantity = produced_quantities[demand.demand_id]
+        if produced_quantity == demand.quantity:
+            continue
+
+        if produced_quantity < demand.quantity:
+            code = VerificationFindingCode.DEMAND_UNDERPRODUCED
+            difference = demand.quantity - produced_quantity
+            comparison = f"underproduced by {difference}"
+        else:
+            code = VerificationFindingCode.DEMAND_OVERPRODUCED
+            difference = produced_quantity - demand.quantity
+            comparison = f"overproduced by {difference}"
+
+        findings.append(
+            VerificationFinding(
+                code=code,
+                message=(
+                    f"Demand {demand.demand_id!r} requires quantity "
+                    f"{demand.quantity}, but patterns produce "
+                    f"{produced_quantity} ({comparison})."
+                ),
+                demand_id=demand.demand_id,
             )
         )
 
