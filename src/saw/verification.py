@@ -23,6 +23,7 @@ def verify_solution(
     findings.extend(_check_duplicate_patterns(solution))
     findings.extend(_check_pattern_capacity(problem, solution))
     findings.extend(_check_material_compatibility(problem, solution))
+    findings.extend(_check_bounded_stock_consumption(problem, solution))
 
     return VerificationReport(findings=tuple(findings))
 
@@ -302,5 +303,50 @@ def _check_material_compatibility(
                     pattern_index=pattern_index,
                 )
             )
+
+    return findings
+
+
+def _check_bounded_stock_consumption(
+    problem: Problem,
+    solution: Solution,
+) -> list[VerificationFinding]:
+    findings: list[VerificationFinding] = []
+    stocks_by_id = {stock.stock_id: stock for stock in problem.stocks}
+    used_quantities: dict[str, int] = {}
+
+    for cut_pattern in solution.cut_patterns:
+        stock_id = cut_pattern.stock_id
+        repetitions = cut_pattern.repetitions
+
+        if not isinstance(stock_id, str) or stock_id not in stocks_by_id:
+            continue
+        if (
+            not isinstance(repetitions, int)
+            or isinstance(repetitions, bool)
+            or repetitions <= 0
+        ):
+            continue
+
+        used_quantities[stock_id] = (
+            used_quantities.get(stock_id, 0) + repetitions
+        )
+
+    for stock in problem.stocks:
+        used_quantity = used_quantities.get(stock.stock_id, 0)
+        if used_quantity <= stock.quantity:
+            continue
+
+        findings.append(
+            VerificationFinding(
+                code=VerificationFindingCode.STOCK_QUANTITY_EXCEEDED,
+                message=(
+                    f"Patterns use stock {stock.stock_id!r} "
+                    f"{used_quantity} times, exceeding available quantity "
+                    f"{stock.quantity} by {used_quantity - stock.quantity}."
+                ),
+                stock_id=stock.stock_id,
+            )
+        )
 
     return findings

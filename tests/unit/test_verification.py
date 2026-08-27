@@ -228,8 +228,8 @@ def test_every_duplicate_after_the_first_is_reported() -> None:
     pattern = Pattern("stock-10", {"demand-6": 1})
     solution = _make_solution(
         CutPattern(pattern=pattern, repetitions=1),
-        CutPattern(pattern=pattern, repetitions=2),
-        CutPattern(pattern=pattern, repetitions=3),
+        CutPattern(pattern=pattern, repetitions=1),
+        CutPattern(pattern=pattern, repetitions=1),
     )
 
     report = verify_solution(_make_problem(), solution)
@@ -445,3 +445,45 @@ def test_every_material_mismatch_is_reported() -> None:
         "demand-aluminum-4",
         "demand-wood-2",
     ]
+
+
+def test_stock_usage_is_aggregated_across_patterns() -> None:
+    solution = _make_solution(
+        CutPattern(
+            pattern=Pattern("stock-10", {"demand-6": 1}),
+            repetitions=2,
+        ),
+        CutPattern(
+            pattern=Pattern("stock-10", {"demand-4": 1}),
+            repetitions=2,
+        ),
+    )
+
+    report = verify_solution(_make_problem(), solution)
+
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.code is VerificationFindingCode.STOCK_QUANTITY_EXCEEDED
+    assert finding.stock_id == "stock-10"
+    assert finding.pattern_index is None
+    assert "4 times" in finding.message
+    assert "available quantity 3" in finding.message
+    assert "by 1" in finding.message
+
+
+def test_stock_usage_is_aggregated_separately_by_stock_id() -> None:
+    solution = _make_solution(
+        CutPattern(
+            pattern=Pattern("stock-10", {"demand-6": 1}),
+            repetitions=3,
+        ),
+        CutPattern(
+            pattern=Pattern("stock-12", {"demand-4": 1}),
+            repetitions=2,
+        ),
+    )
+
+    report = verify_solution(_make_problem(), solution)
+
+    assert report.is_valid
+    assert report.findings == ()
