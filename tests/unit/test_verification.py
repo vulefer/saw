@@ -1,5 +1,7 @@
 import pytest
 
+import saw.patterns as pattern_helpers
+import saw.verification as verification_module
 from saw import verify_solution as public_verify_solution
 from saw.models import (
     BackendStatus,
@@ -244,3 +246,140 @@ def test_same_piece_counts_for_different_stocks_are_not_duplicates() -> None:
 
     assert report.is_valid
     assert report.findings == ()
+
+
+def test_pattern_with_unused_capacity_is_accepted() -> None:
+    solution = _make_solution(
+        CutPattern(
+            pattern=Pattern("stock-10", {"demand-6": 1}),
+            repetitions=1,
+        )
+    )
+
+    report = verify_solution(_make_problem(), solution)
+
+    assert report.is_valid
+    assert report.findings == ()
+
+
+def test_pattern_that_exactly_fills_stock_is_accepted() -> None:
+    solution = _make_solution(
+        CutPattern(
+            pattern=Pattern(
+                "stock-10",
+                {"demand-6": 1, "demand-4": 1},
+            ),
+            repetitions=1,
+        )
+    )
+
+    report = verify_solution(_make_problem(), solution)
+
+    assert report.is_valid
+    assert report.findings == ()
+
+
+def test_pattern_capacity_uses_demand_lengths_and_piece_counts() -> None:
+    solution = _make_solution(
+        CutPattern(
+            # The requested demand quantity is 3, but this pattern uses 2.
+            # Capacity must therefore be 2 * 4 = 8, not 3 * 4 = 12.
+            pattern=Pattern("stock-10", {"demand-4": 2}),
+            repetitions=1,
+        )
+    )
+
+    report = verify_solution(_make_problem(), solution)
+
+    assert report.is_valid
+    assert report.findings == ()
+
+
+def test_over_capacity_pattern_is_reported() -> None:
+    solution = _make_solution(
+        CutPattern(
+            pattern=Pattern("stock-10", {"demand-6": 1, "demand-4": 2}),
+            repetitions=1,
+        )
+    )
+
+    report = verify_solution(_make_problem(), solution)
+
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.code is VerificationFindingCode.PATTERN_CAPACITY_EXCEEDED
+    assert finding.stock_id == "stock-10"
+    assert finding.pattern_index == 0
+    assert "uses length 14" in finding.message
+    assert "stock length 10" in finding.message
+    assert "by 4" in finding.message
+
+
+def test_pattern_capacity_is_checked_per_use_not_across_repetitions() -> None:
+    solution = _make_solution(
+        CutPattern(
+            pattern=Pattern("stock-10", {"demand-6": 1}),
+            repetitions=2,
+        )
+    )
+
+    report = verify_solution(_make_problem(), solution)
+
+    assert report.is_valid
+    assert report.findings == ()
+
+
+def test_malformed_pattern_does_not_prevent_other_capacity_checks() -> None:
+    solution = _make_solution(
+        CutPattern(
+            pattern=Pattern(
+                "stock-10",
+                {"demand-6": 1.5},  # type: ignore[dict-item]
+            ),
+            repetitions=1,
+        ),
+        CutPattern(
+            pattern=Pattern("stock-10", {"demand-6": 2}),
+            repetitions=1,
+        ),
+    )
+
+    report = verify_solution(_make_problem(), solution)
+
+    assert [finding.code for finding in report.findings] == [
+        VerificationFindingCode.MALFORMED_PATTERN,
+        VerificationFindingCode.PATTERN_CAPACITY_EXCEEDED,
+    ]
+    assert report.findings[0].pattern_index == 0
+    assert report.findings[1].pattern_index == 1
+
+
+def test_capacity_verification_does_not_use_pattern_generators(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_called(*args: object, **kwargs: object) -> None:
+        raise AssertionError("production pattern generator was called")
+
+    helper_names = (
+        "enumerate_patterns_for_single_stock",
+        "enumerate_patterns_for_problem",
+    )
+    for helper_name in helper_names:
+        monkeypatch.setattr(pattern_helpers, helper_name, fail_if_called)
+        monkeypatch.setattr(
+            verification_module,
+            helper_name,
+            fail_if_called,
+            raising=False,
+        )
+
+    solution = _make_solution(
+        CutPattern(
+            pattern=Pattern("stock-10", {"demand-6": 1}),
+            repetitions=1,
+        )
+    )
+
+    report = verify_solution(_make_problem(), solution)
+
+    assert report.is_valid

@@ -1,4 +1,7 @@
+from collections.abc import Mapping
+
 from saw.models import (
+    Demand,
     Problem,
     Solution,
     VerificationFinding,
@@ -18,6 +21,7 @@ def verify_solution(
     findings.extend(_check_repetition_counts(solution))
     findings.extend(_check_pattern_structure(solution))
     findings.extend(_check_duplicate_patterns(solution))
+    findings.extend(_check_pattern_capacity(problem, solution))
 
     return VerificationReport(findings=tuple(findings))
 
@@ -191,5 +195,64 @@ def _check_duplicate_patterns(
             )
         else:
             first_index_by_pattern[pattern] = pattern_index
+
+    return findings
+
+def _calculate_used_length(
+    piece_counts: Mapping[str, int],
+    demand_by_id: Mapping[str, Demand],
+) -> int:
+    return sum(
+        demand_by_id[demand_id].length * count
+        for demand_id, count in piece_counts.items()
+    )
+
+
+def _check_pattern_capacity(
+    problem: Problem,
+    solution: Solution,
+) -> list[VerificationFinding]:
+    findings: list[VerificationFinding] = []
+    stocks_by_id = {stock.stock_id: stock for stock in problem.stocks}
+    demand_by_id = {
+        demand.demand_id: demand for demand in problem.demands
+    }
+
+    for pattern_index, cut_pattern in enumerate(solution.cut_patterns):
+        if not isinstance(cut_pattern.stock_id, str):
+            continue
+
+        stock = stocks_by_id.get(cut_pattern.stock_id)
+        if stock is None:
+            continue
+
+        if any(
+            not isinstance(demand_id, str)
+            or demand_id not in demand_by_id
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count <= 0
+            for demand_id, count in cut_pattern.piece_counts.items()
+        ):
+            continue
+
+        used_length = _calculate_used_length(
+            cut_pattern.piece_counts,
+            demand_by_id,
+        )
+        delta = stock.length - used_length
+
+        if delta < 0:
+            findings.append(
+                VerificationFinding(
+                    code=VerificationFindingCode.PATTERN_CAPACITY_EXCEEDED,
+                    message=(
+                        f"Pattern uses length {used_length}, exceeding "
+                        f"stock length {stock.length} by {-delta}."
+                    ),
+                    stock_id=stock.stock_id,
+                    pattern_index=pattern_index,
+                )
+            )
 
     return findings
