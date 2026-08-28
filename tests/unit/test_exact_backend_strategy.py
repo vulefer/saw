@@ -16,6 +16,7 @@ from saw.backends.pulp_backend import PulpAdapterError
 from saw.models import (
     BackendStatus,
     ObjectiveStage,
+    ObjectiveValue,
     TerminationReason,
 )
 from saw.patterns import enumerate_patterns_for_problem
@@ -103,6 +104,52 @@ def test_primary_infeasibility_is_returned_as_a_structured_result() -> None:
     assert result.diagnostics.termination_reason is TerminationReason.COMPLETED
     assert result.diagnostics.elapsed_time == 1.5
     assert result.diagnostics.completed_objective_stages == ()
+
+
+def test_empty_demand_has_a_proven_zero_optimum_without_calling_solver() -> None:
+    adapter = FakeAdapter()
+    backend = ExactEnumeratedBackend(adapter)  # type: ignore[arg-type]
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 1),),
+        demands=(),
+    )
+
+    result = backend.solve(problem, BackendOptions())
+
+    assert result.candidate is not None
+    assert result.candidate.cut_patterns == ()
+    assert result.candidate.objective_value == ObjectiveValue(0, 0, 0)
+    assert result.diagnostics.backend_status is BackendStatus.OPTIMAL
+    assert result.diagnostics.termination_reason is TerminationReason.COMPLETED
+    assert result.diagnostics.patterns_generated == 0
+    assert result.diagnostics.iterations == 0
+    assert result.diagnostics.completed_objective_stages == tuple(
+        ObjectiveStage
+    )
+    assert result.diagnostics.lower_bound == 0
+    assert result.diagnostics.upper_bound == 0
+    assert adapter.solve_calls == 0
+
+
+def test_no_feasible_patterns_proves_infeasibility_without_solver() -> None:
+    adapter = FakeAdapter()
+    backend = ExactEnumeratedBackend(adapter)  # type: ignore[arg-type]
+    problem = Problem(
+        stocks=(Stock("stock-3", "steel", 3, 1),),
+        demands=(Demand("piece-4", "steel", 4, 1),),
+    )
+
+    result = backend.solve(problem, BackendOptions())
+
+    assert result.candidate is None
+    assert result.diagnostics.backend_status is BackendStatus.INFEASIBLE
+    assert result.diagnostics.termination_reason is TerminationReason.COMPLETED
+    assert result.diagnostics.patterns_generated == 0
+    assert result.diagnostics.iterations == 0
+    assert result.diagnostics.completed_objective_stages == ()
+    assert result.diagnostics.lower_bound is None
+    assert result.diagnostics.upper_bound is None
+    assert adapter.solve_calls == 0
 
 
 def test_feasible_limit_incumbent_is_returned_without_optimality_claim() -> None:

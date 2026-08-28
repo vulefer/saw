@@ -11,6 +11,7 @@ from saw.backends.base import (
     BackendCapabilities,
     BackendOptions,
     BackendSupport,
+    UnverifiedCandidate,
     UnverifiedBackendResult,
 )
 from saw.backends.exact_enumerated.output import (
@@ -30,6 +31,7 @@ from saw.models import (
     BackendStatus,
     Diagnostics,
     ObjectiveStage,
+    ObjectiveValue,
     Problem,
     TerminationReason,
 )
@@ -100,6 +102,49 @@ def _stopped_backend_result(
                     else None
                 )
             ),
+        ),
+    )
+
+
+def _empty_demand_result() -> UnverifiedBackendResult:
+    """Return the proven optimum for a problem that requires no cuts."""
+
+    return UnverifiedBackendResult(
+        candidate=UnverifiedCandidate(
+            cut_patterns=(),
+            objective_value=ObjectiveValue(
+                stock_piece_count=0,
+                total_leftover=0,
+                distinct_pattern_count=0,
+            ),
+        ),
+        diagnostics=Diagnostics(
+            termination_reason=TerminationReason.COMPLETED,
+            backend_status=BackendStatus.OPTIMAL,
+            elapsed_time=0.0,
+            patterns_generated=0,
+            iterations=0,
+            completed_objective_stages=tuple(ObjectiveStage),
+            lower_bound=0,
+            upper_bound=0,
+        ),
+    )
+
+
+def _no_pattern_infeasible_result() -> UnverifiedBackendResult:
+    """Return proven infeasibility when no non-empty cut can be made."""
+
+    return UnverifiedBackendResult(
+        candidate=None,
+        diagnostics=Diagnostics(
+            termination_reason=TerminationReason.COMPLETED,
+            backend_status=BackendStatus.INFEASIBLE,
+            elapsed_time=0.0,
+            patterns_generated=0,
+            iterations=0,
+            completed_objective_stages=(),
+            lower_bound=None,
+            upper_bound=None,
         ),
     )
 
@@ -253,27 +298,32 @@ class ExactEnumeratedBackend:
         started_at = perf_counter()
         patterns = enumerate_patterns_for_problem(problem)
 
-        try:
-            result = solve_exact_enumerated_pipeline(
-                problem,
-                patterns,
-                self._adapter,
-                options,
-            )
-        except PulpAdapterError:
-            return UnverifiedBackendResult(
-                candidate=None,
-                diagnostics=Diagnostics(
-                    termination_reason=TerminationReason.BACKEND_FAILURE,
-                    backend_status=BackendStatus.FAILED,
-                    elapsed_time=perf_counter() - started_at,
-                    patterns_generated=len(patterns),
-                    iterations=1,
-                    completed_objective_stages=(),
-                    lower_bound=None,
-                    upper_bound=None,
-                ),
-            )
+        if not problem.demands:
+            result = _empty_demand_result()
+        elif not patterns:
+            result = _no_pattern_infeasible_result()
+        else:
+            try:
+                result = solve_exact_enumerated_pipeline(
+                    problem,
+                    patterns,
+                    self._adapter,
+                    options,
+                )
+            except PulpAdapterError:
+                return UnverifiedBackendResult(
+                    candidate=None,
+                    diagnostics=Diagnostics(
+                        termination_reason=TerminationReason.BACKEND_FAILURE,
+                        backend_status=BackendStatus.FAILED,
+                        elapsed_time=perf_counter() - started_at,
+                        patterns_generated=len(patterns),
+                        iterations=1,
+                        completed_objective_stages=(),
+                        lower_bound=None,
+                        upper_bound=None,
+                    ),
+                )
 
         return replace(
             result,
