@@ -1,5 +1,6 @@
-"""Test-only independent reference solver for tiny Saw problems."""
+"""Test-only exhaustive utilities for tiny Saw problems."""
 
+from tests.oracle.small_instance_generator import generate_small_instances
 from tests.oracle.small_instance_oracle import (
     OracleObjective,
     OracleResult,
@@ -9,5 +10,6 @@ from tests.oracle.small_instance_oracle import (
 __all__ = (
     "OracleObjective",
     "OracleResult",
+    "generate_small_instances",
     "solve_small_instance",
 )
