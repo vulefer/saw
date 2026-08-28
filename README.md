@@ -4,6 +4,12 @@ A correctness-first, open-source solver for one-dimensional cutting-stock proble
 The authoritative definition of the v0.1.0 problem is in
 [docs/problem-spec.md](docs/problem-spec.md).
 
+Before relying on a result, read the v0.1.0
+[guarantees](docs/guarantees.md) and
+[limitations](docs/limitations.md). In particular, a verified plan is not by
+itself proof that the plan is optimal, and the exact backend is intended only
+for small and medium-small instances.
+
 ## Minimal Python example
 
 Construct a problem from stock and demand records, solve it, and check the
