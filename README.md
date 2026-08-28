@@ -62,11 +62,14 @@ package and its development dependencies with:
 python -m pip install -e ".[dev]"
 ```
 
-Run the complete test suite with:
+Run every test required for a release (unit, regression, oracle, and the
+documented example) with this single command from the repository root:
 
 ```shell
-python -m pytest
+python scripts/run_release_tests.py
 ```
+
+The command exits with a non-zero status if any required test fails.
 
 ## Optimization backend dependency
 
