@@ -11,6 +11,7 @@ RELEASE_TEST_PATHS = (
     "tests/regression",
     "tests/oracle",
     "tests/compatibility",
+    "tests/contracts",
     "tests/test_minimal_example.py",
 )
 
