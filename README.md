@@ -18,6 +18,11 @@ Before relying on a result, read the v0.1.0
 itself proof that the plan is optimal, and the exact backend is intended only
 for small and medium-small instances.
 
+Saw v0.2.0's planned time, problem-size, numeric-magnitude, and pattern-count
+budgets have one authoritative [resource-limit contract](docs/resource-limits.md).
+It defines their units, safe defaults, override policy, end-to-end timing, and
+truthful outcomes with and without a verified incumbent.
+
 ## Minimal Python example
 
 Construct a problem from stock and demand records, solve it, and check the

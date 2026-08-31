@@ -26,6 +26,11 @@ not implement it. Supplying one returns `UNSUPPORTED`; it does not truncate
 enumeration. Safe problem-size, enumeration, and end-to-end resource controls
 are roadmap work deferred to v0.2.0; they are not available in v0.1.0.
 
+The units, defaults, disable/override behavior, and termination rules selected
+for that v0.2.0 work are defined in the
+[v0.2.0 resource-limit contract](resource-limits.md). That contract does not
+retroactively change v0.1.0 behavior.
+
 ## Unsupported cutting and inventory semantics
 
 v0.1.0 does not support:
