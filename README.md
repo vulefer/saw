@@ -53,10 +53,20 @@ and can be run from the repository root with:
 python examples/minimal.py
 ```
 
+## Compatibility
+
+Saw v0.2.0 supports standard, GIL-enabled CPython 3.10 through 3.14 on
+64-bit Linux, Windows, and Intel macOS systems within the tested platform
+scope. Python 3.15 and later are not considered supported until they are
+added to the test matrix.
+
+The complete platform and unsupported-environment policy is documented in
+[docs/compatibility.md](docs/compatibility.md).
+
 ## Development
 
-Saw requires Python 3.10 or newer. From the repository root, install the
-package and its development dependencies with:
+Use a supported CPython version. From the repository root, install the package
+and its development dependencies with:
 
 ```shell
 python -m pip install -e ".[dev]"
@@ -71,11 +81,11 @@ python scripts/run_release_tests.py
 
 The command exits with a non-zero status if any required test fails.
 
-## Optimization backend dependency
+## Optimization backend dependencies
 
-Saw v0.1 supports PuLP versions `>=3.3,<4`. The required `cbc` extra is
-declared with that dependency so the adapter can supply PuLP with an
-executable CBC solver.
+Saw v0.2 supports PuLP versions `>=3.3.2,<4` and cbcbox versions
+`>=2.929,<3`. Both are direct dependencies: PuLP provides the modeling API,
+and cbcbox provides the CBC executable used by the default backend.
 The adapter checks CBC availability at runtime and reports the installed PuLP
 version in its availability result.
 

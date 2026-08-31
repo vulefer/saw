@@ -24,6 +24,7 @@ def test_release_command_runs_every_required_suite(
             "tests/unit",
             "tests/regression",
             "tests/oracle",
+            "tests/compatibility",
             "tests/test_minimal_example.py",
         ],
         "cwd": run_release_tests.REPOSITORY_ROOT,
