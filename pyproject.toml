@@ -25,6 +25,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "jsonschema>=4.23,<5",
     "pytest>=9,<10",
 ]
 

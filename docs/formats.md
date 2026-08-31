@@ -1,15 +1,16 @@
 # Saw data formats
 
-This document defines Saw's public data-format contracts. The JSON problem
-format is versioned independently from the Saw package and from the Python
-problem model. In this document, **must**, **must not**, and **may** are
+This document defines Saw's public data-format contracts. The JSON problem and
+solution formats are versioned independently from the Saw package and from the
+Python models. In this document, **must**, **must not**, and **may** are
 normative requirements.
 
 ## JSON problem format version 1
 
 Version 1 is the canonical JSON representation of a Saw problem. It serializes
-only problem input. It does not define solution JSON, a command-line interface,
-or parser behavior beyond the validation and compatibility rules below.
+only problem input. The solution contract is specified separately below. This
+section does not define a command-line interface or parser behavior beyond the
+validation and compatibility rules below.
 
 The companion structural schema is
 [`schemas/problem-v1.schema.json`](../schemas/problem-v1.schema.json). This
@@ -188,3 +189,208 @@ mathematical meaning shared by both representations are defined in
 [`problem-spec.md`](problem-spec.md). Version 1 JSON field names map directly
 to those public model fields; `format_version` is JSON envelope metadata rather
 than a field on `Problem`.
+
+## JSON solution format version 1
+
+Version 1 is the canonical JSON representation of a public Saw solution. Its
+companion structural schema is
+[`schemas/solution-v1.schema.json`](../schemas/solution-v1.schema.json). The
+schema and the status rules in this section are one contract: a consumer must
+not read a field independently of `solution_status` and infer a stronger claim.
+
+The contract represents completed solver outcomes. Invalid problem input and
+failures which the Python API exposes as exceptions are not solution payloads.
+In particular, a backend candidate which fails independent verification is not
+published as an `error` solution with the invalid candidate attached.
+
+### Top-level object and field presence
+
+Every version 1 solution is one closed JSON object. The following members are
+always required:
+
+| Member | Type and meaning |
+| --- | --- |
+| `format_version` | The JSON integer `1`. |
+| `solution_status` | One of the lowercase status strings defined below. |
+| `diagnostics` | The diagnostic object defined below. |
+
+The other three top-level members form an indivisible verified-plan group:
+
+| Member | Type and meaning |
+| --- | --- |
+| `cut_patterns` | The complete array of positive-use cut patterns. |
+| `objective_value` | The independently recomputed three-part objective. |
+| `verification_report` | The independent verification result for that plan. |
+
+Their presence is determined by status:
+
+| `solution_status` | Verified-plan group | Exact claim |
+| --- | --- | --- |
+| `optimal` | Required; report must be `valid`. | The plan is verified and global lexicographic optimality was proved. |
+| `feasible` | Required; report must be `valid`. | The plan is verified; global lexicographic optimality was not proved. |
+| `infeasible` | Forbidden. | A complete method proved that no feasible plan exists. |
+| `limit` | Either all three members are present with a `valid` report, or all three are omitted. | A declared resource limit stopped the operation. A present plan is verified, but the status proves neither optimality nor infeasibility. |
+| `unsupported` | Forbidden. | The valid problem is outside the selected backend's supported scope. This makes no feasibility claim. |
+| `error` | Forbidden. | An internal or backend failure prevents a mathematical claim. |
+
+“Forbidden” means that the member must be omitted, not emitted as `null`, an
+empty object, or a placeholder value. Conversely, `optimal` and `feasible`
+always include all three plan members; an empty `cut_patterns` array is a real,
+verified zero-stock plan for a problem with no demand and is not an absent plan.
+This makes absence distinct from an intentionally empty value.
+
+Unknown top-level and nested members are invalid. The version is independent of
+the package version and of the problem-format version. A future incompatible
+solution change will use another `format_version`.
+
+### Cut patterns
+
+Each member of `cut_patterns` has exactly these fields:
+
+| Member | Type and meaning |
+| --- | --- |
+| `stock_id` | A non-empty string containing the referenced problem stock ID. |
+| `piece_counts` | A non-empty object whose member names are referenced problem demand IDs and whose values are positive integer counts in one use of the pattern. |
+| `repetitions` | A positive integer giving the number of times the whole pattern is used. |
+
+Stock and demand IDs are values, never array positions. ID equality is exact and
+case-sensitive, using the same rules as problem format version 1. A consumer
+must not multiply counts into `piece_counts`: for example, a pattern containing
+two pieces of `demand-a` and used three times is represented by
+`"piece_counts": {"demand-a": 2}` and `"repetitions": 3`.
+
+Zero-count entries, empty patterns, duplicate canonical patterns, non-positive
+counts, and non-positive repetitions are invalid. Two patterns are duplicates
+when both `stock_id` and all positive `piece_counts` members are equal,
+regardless of JSON object-member order. JSON Schema cannot express that
+cross-item identity rule, so readers must check it separately. Pattern-array
+order and `piece_counts` member order have no semantic meaning.
+
+### Objective value
+
+`objective_value` contains exactly three non-negative JSON integers:
+
+| Member | Meaning |
+| --- | --- |
+| `stock_piece_count` | Total stock pieces consumed by all repetitions. |
+| `total_leftover` | Total unused length in millimetres across all repetitions. |
+| `distinct_pattern_count` | Number of canonical positive-use patterns. |
+
+The tuple is ordered lexicographically in that order by the problem
+specification. Its presence proves only that the attached plan was independently
+recomputed and matched these values. It does not prove optimality; only
+`solution_status: "optimal"` makes that claim.
+
+### Diagnostics
+
+`diagnostics` always contains exactly these members:
+
+| Member | Type and meaning |
+| --- | --- |
+| `termination_reason` | A lowercase `TerminationReason` value describing why execution stopped. |
+| `backend_status` | A lowercase normalized `BackendStatus` value observed before public-status translation. |
+| `elapsed_time` | A finite, non-negative JSON number of elapsed seconds. |
+| `patterns_generated` | A non-negative integer. |
+| `iterations` | A non-negative integer. |
+| `completed_objective_stages` | The ordered prefix of objective stages proved complete. |
+| `lower_bound` | A non-negative integer primary-objective bound, or JSON `null` when no bound is reported. |
+| `upper_bound` | A non-negative integer primary-objective bound, or JSON `null` when no bound is reported. |
+
+The only valid stage order is `stock_piece_count`, `total_leftover`, then
+`distinct_pattern_count`. An `optimal` result contains all three. Other statuses
+contain only the completed prefix permitted by the schema; completed earlier
+stages do not upgrade the public status.
+
+Numeric bounds concern only `stock_piece_count`. A numeric lower bound must be a
+proved lower bound and a numeric upper bound must come from a feasible solution;
+producers must use `null` rather than a guess. When both are numeric, the lower
+bound must not exceed the upper bound. A bound, equal bounds, a backend status,
+or a termination reason never overrides `solution_status` and never proves the
+later objective stages.
+
+The schema restricts status/diagnostic combinations. In particular,
+`infeasible` requires a normalized `infeasible` backend outcome, `limit`
+requires `limit_reached`, and `unsupported` requires `not_run` with
+`unsupported_problem`. Error diagnostics use only failure outcomes and reasons.
+Because `error` makes no mathematical claim, it also reports no completed
+objective stages and uses `null` for both bounds.
+
+### Verification report and findings
+
+A verification report has exactly `result` and `findings`. The stable result
+strings are:
+
+- `valid`, which requires an empty findings array; and
+- `invalid`, which requires one or more structured findings.
+
+Every finding requires a `code` from the public `VerificationFindingCode` enum
+and a non-empty `message`. It may include `stock_id`, `demand_id`, or the
+zero-based `pattern_index` only when that context applies; absent context fields
+are omitted rather than set to `null`.
+
+The schema defines both verification-result representations so the public
+verification vocabulary is stable. A plan included in a normal solution
+payload must have a `valid` report. An `invalid` report describes a standalone
+verification outcome; it is never evidence for a published plan and cannot be
+attached to any version 1 solution status.
+
+### JSON primitive and semantic rules
+
+The duplicate-member, integer-spelling, ID-preservation, and unknown-field
+rules from problem format version 1 apply equally here. In addition:
+
+- `elapsed_time` must be a finite JSON number; `NaN` and infinities are not JSON
+  values;
+- counts, repetitions, indices, and bounds use JSON integer spelling without
+  coercion;
+- a reader validating a solution together with its problem must check that all
+  referenced IDs exist and independently enforce the pattern, inventory,
+  production, objective, bound, and verification relationships; and
+- schema validity establishes representation validity only. It is not an
+  independent mathematical verification and must never be presented as one.
+
+### Valid optimal-result example
+
+The following result is valid. It is also available as
+[`examples/json/solution-v1-optimal.json`](../examples/json/solution-v1-optimal.json).
+
+```json
+{
+  "format_version": 1,
+  "solution_status": "optimal",
+  "cut_patterns": [
+    {
+      "stock_id": "stock-10",
+      "piece_counts": {"demand-4": 1, "demand-6": 1},
+      "repetitions": 1
+    }
+  ],
+  "objective_value": {
+    "stock_piece_count": 1,
+    "total_leftover": 0,
+    "distinct_pattern_count": 1
+  },
+  "diagnostics": {
+    "termination_reason": "completed",
+    "backend_status": "optimal",
+    "elapsed_time": 0.01,
+    "patterns_generated": 4,
+    "iterations": 3,
+    "completed_objective_stages": [
+      "stock_piece_count",
+      "total_leftover",
+      "distinct_pattern_count"
+    ],
+    "lower_bound": 1,
+    "upper_bound": 1
+  },
+  "verification_report": {
+    "result": "valid",
+    "findings": []
+  }
+}
+```
+
+For a `limit` result with no verified incumbent, all three plan members are
+omitted. Adding only `cut_patterns`, using `null` for `objective_value`, or
+attaching an `invalid` report would make the payload invalid.

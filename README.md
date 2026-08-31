@@ -4,9 +4,11 @@ A correctness-first, open-source solver for one-dimensional cutting-stock proble
 The authoritative definition of the v0.1.0 problem is in
 [docs/problem-spec.md](docs/problem-spec.md).
 
-The independently versioned JSON problem format is defined in
-[docs/formats.md](docs/formats.md). Its version 1 contract is specified before
-the parser and command-line interface are implemented.
+The independently versioned JSON problem and solution formats are defined in
+[docs/formats.md](docs/formats.md). Their version 1 contracts are specified
+before the parser and command-line interface are implemented. The solution
+contract makes plan presence status-dependent, so an omitted plan cannot be
+mistaken for an empty or verified plan.
 
 Before relying on a result, read the v0.1.0
 [guarantees](docs/guarantees.md) and

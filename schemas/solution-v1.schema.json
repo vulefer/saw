@@ -1,0 +1,615 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Saw JSON solution format version 1",
+  "description": "Structural schema for the Saw version 1 JSON solution contract. Status-specific rules prevent an absent or unverified plan from being mistaken for a proven result. See docs/formats.md for semantic rules that JSON Schema cannot express.",
+  "type": "object",
+  "required": [
+    "format_version",
+    "solution_status",
+    "diagnostics"
+  ],
+  "properties": {
+    "format_version": {
+      "const": 1
+    },
+    "solution_status": {
+      "$ref": "#/$defs/solutionStatus"
+    },
+    "cut_patterns": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/cutPattern"
+      }
+    },
+    "objective_value": {
+      "$ref": "#/$defs/objectiveValue"
+    },
+    "diagnostics": {
+      "$ref": "#/$defs/diagnostics"
+    },
+    "verification_report": {
+      "$ref": "#/$defs/verificationReport"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "solution_status": {
+            "const": "optimal"
+          }
+        },
+        "required": [
+          "solution_status"
+        ]
+      },
+      "then": {
+        "required": [
+          "cut_patterns",
+          "objective_value",
+          "verification_report"
+        ],
+        "properties": {
+          "diagnostics": {
+            "$ref": "#/$defs/optimalDiagnostics"
+          },
+          "verification_report": {
+            "$ref": "#/$defs/validVerificationReport"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "solution_status": {
+            "const": "feasible"
+          }
+        },
+        "required": [
+          "solution_status"
+        ]
+      },
+      "then": {
+        "required": [
+          "cut_patterns",
+          "objective_value",
+          "verification_report"
+        ],
+        "properties": {
+          "diagnostics": {
+            "$ref": "#/$defs/feasibleDiagnostics"
+          },
+          "verification_report": {
+            "$ref": "#/$defs/validVerificationReport"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "solution_status": {
+            "const": "infeasible"
+          }
+        },
+        "required": [
+          "solution_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "cut_patterns": false,
+          "objective_value": false,
+          "diagnostics": {
+            "$ref": "#/$defs/infeasibleDiagnostics"
+          },
+          "verification_report": false
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "solution_status": {
+            "const": "limit"
+          }
+        },
+        "required": [
+          "solution_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "diagnostics": {
+            "$ref": "#/$defs/limitDiagnostics"
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "cut_patterns",
+              "objective_value",
+              "verification_report"
+            ],
+            "properties": {
+              "verification_report": {
+                "$ref": "#/$defs/validVerificationReport"
+              }
+            }
+          },
+          {
+            "properties": {
+              "cut_patterns": false,
+              "objective_value": false,
+              "diagnostics": {
+                "$ref": "#/$defs/limitWithoutIncumbentDiagnostics"
+              },
+              "verification_report": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "solution_status": {
+            "enum": [
+              "unsupported",
+              "error"
+            ]
+          }
+        },
+        "required": [
+          "solution_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "cut_patterns": false,
+          "objective_value": false,
+          "verification_report": false
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "solution_status": {
+            "const": "unsupported"
+          }
+        },
+        "required": [
+          "solution_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "diagnostics": {
+            "$ref": "#/$defs/unsupportedDiagnostics"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "solution_status": {
+            "const": "error"
+          }
+        },
+        "required": [
+          "solution_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "diagnostics": {
+            "$ref": "#/$defs/errorDiagnostics"
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "nonEmptyIdentifier": {
+      "type": "string",
+      "minLength": 1
+    },
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "positiveInteger": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "solutionStatus": {
+      "enum": [
+        "optimal",
+        "feasible",
+        "infeasible",
+        "limit",
+        "unsupported",
+        "error"
+      ]
+    },
+    "terminationReason": {
+      "enum": [
+        "completed",
+        "time_limit",
+        "node_limit",
+        "iteration_limit",
+        "pattern_limit",
+        "size_limit",
+        "cancelled",
+        "unsupported_problem",
+        "backend_unavailable",
+        "backend_failure",
+        "unknown_backend_status",
+        "internal_error"
+      ]
+    },
+    "backendStatus": {
+      "enum": [
+        "not_run",
+        "optimal",
+        "feasible",
+        "infeasible",
+        "unbounded",
+        "limit_reached",
+        "not_solved",
+        "failed",
+        "unknown"
+      ]
+    },
+    "objectiveStage": {
+      "enum": [
+        "stock_piece_count",
+        "total_leftover",
+        "distinct_pattern_count"
+      ]
+    },
+    "cutPattern": {
+      "type": "object",
+      "required": [
+        "stock_id",
+        "piece_counts",
+        "repetitions"
+      ],
+      "properties": {
+        "stock_id": {
+          "$ref": "#/$defs/nonEmptyIdentifier"
+        },
+        "piece_counts": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/nonEmptyIdentifier"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/positiveInteger"
+          }
+        },
+        "repetitions": {
+          "$ref": "#/$defs/positiveInteger"
+        }
+      },
+      "additionalProperties": false
+    },
+    "objectiveValue": {
+      "type": "object",
+      "required": [
+        "stock_piece_count",
+        "total_leftover",
+        "distinct_pattern_count"
+      ],
+      "properties": {
+        "stock_piece_count": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "total_leftover": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "distinct_pattern_count": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        }
+      },
+      "additionalProperties": false
+    },
+    "nullableBound": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "completedObjectiveStages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/objectiveStage"
+      },
+      "uniqueItems": true
+    },
+    "incompleteObjectiveStages": {
+      "enum": [
+        [],
+        [
+          "stock_piece_count"
+        ],
+        [
+          "stock_piece_count",
+          "total_leftover"
+        ]
+      ]
+    },
+    "diagnostics": {
+      "type": "object",
+      "required": [
+        "termination_reason",
+        "backend_status",
+        "elapsed_time",
+        "patterns_generated",
+        "iterations",
+        "completed_objective_stages",
+        "lower_bound",
+        "upper_bound"
+      ],
+      "properties": {
+        "termination_reason": {
+          "$ref": "#/$defs/terminationReason"
+        },
+        "backend_status": {
+          "$ref": "#/$defs/backendStatus"
+        },
+        "elapsed_time": {
+          "type": "number",
+          "minimum": 0
+        },
+        "patterns_generated": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "iterations": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "completed_objective_stages": {
+          "$ref": "#/$defs/completedObjectiveStages"
+        },
+        "lower_bound": {
+          "$ref": "#/$defs/nullableBound"
+        },
+        "upper_bound": {
+          "$ref": "#/$defs/nullableBound"
+        }
+      },
+      "additionalProperties": false
+    },
+    "optimalDiagnostics": {
+      "properties": {
+        "termination_reason": {
+          "const": "completed"
+        },
+        "backend_status": {
+          "const": "optimal"
+        },
+        "completed_objective_stages": {
+          "const": [
+            "stock_piece_count",
+            "total_leftover",
+            "distinct_pattern_count"
+          ]
+        }
+      }
+    },
+    "feasibleDiagnostics": {
+      "properties": {
+        "termination_reason": {
+          "enum": [
+            "completed",
+            "time_limit",
+            "node_limit",
+            "iteration_limit",
+            "pattern_limit",
+            "size_limit",
+            "cancelled"
+          ]
+        },
+        "backend_status": {
+          "const": "feasible"
+        },
+        "completed_objective_stages": {
+          "$ref": "#/$defs/incompleteObjectiveStages"
+        }
+      }
+    },
+    "infeasibleDiagnostics": {
+      "properties": {
+        "termination_reason": {
+          "const": "completed"
+        },
+        "backend_status": {
+          "const": "infeasible"
+        },
+        "completed_objective_stages": {
+          "const": []
+        },
+        "lower_bound": {
+          "type": "null"
+        },
+        "upper_bound": {
+          "type": "null"
+        }
+      }
+    },
+    "limitDiagnostics": {
+      "properties": {
+        "termination_reason": {
+          "enum": [
+            "time_limit",
+            "node_limit",
+            "iteration_limit",
+            "pattern_limit",
+            "size_limit",
+            "cancelled"
+          ]
+        },
+        "backend_status": {
+          "const": "limit_reached"
+        },
+        "completed_objective_stages": {
+          "$ref": "#/$defs/incompleteObjectiveStages"
+        }
+      }
+    },
+    "limitWithoutIncumbentDiagnostics": {
+      "properties": {
+        "upper_bound": {
+          "type": "null"
+        }
+      }
+    },
+    "unsupportedDiagnostics": {
+      "properties": {
+        "termination_reason": {
+          "const": "unsupported_problem"
+        },
+        "backend_status": {
+          "const": "not_run"
+        },
+        "completed_objective_stages": {
+          "const": []
+        },
+        "lower_bound": {
+          "type": "null"
+        },
+        "upper_bound": {
+          "type": "null"
+        }
+      }
+    },
+    "errorDiagnostics": {
+      "properties": {
+        "termination_reason": {
+          "enum": [
+            "backend_unavailable",
+            "backend_failure",
+            "unknown_backend_status",
+            "internal_error"
+          ]
+        },
+        "backend_status": {
+          "enum": [
+            "not_run",
+            "unbounded",
+            "not_solved",
+            "failed",
+            "unknown"
+          ]
+        },
+        "completed_objective_stages": {
+          "const": []
+        },
+        "lower_bound": {
+          "type": "null"
+        },
+        "upper_bound": {
+          "type": "null"
+        }
+      }
+    },
+    "verificationFindingCode": {
+      "enum": [
+        "unknown_stock_id",
+        "unknown_demand_id",
+        "non_positive_repetitions",
+        "empty_pattern",
+        "malformed_pattern",
+        "duplicate_pattern",
+        "pattern_capacity_exceeded",
+        "material_mismatch",
+        "stock_quantity_exceeded",
+        "demand_underproduced",
+        "demand_overproduced",
+        "objective_mismatch"
+      ]
+    },
+    "verificationFinding": {
+      "type": "object",
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/verificationFindingCode"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stock_id": {
+          "$ref": "#/$defs/nonEmptyIdentifier"
+        },
+        "demand_id": {
+          "$ref": "#/$defs/nonEmptyIdentifier"
+        },
+        "pattern_index": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        }
+      },
+      "additionalProperties": false
+    },
+    "validVerificationReport": {
+      "type": "object",
+      "required": [
+        "result",
+        "findings"
+      ],
+      "properties": {
+        "result": {
+          "const": "valid"
+        },
+        "findings": {
+          "type": "array",
+          "maxItems": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "invalidVerificationReport": {
+      "type": "object",
+      "required": [
+        "result",
+        "findings"
+      ],
+      "properties": {
+        "result": {
+          "const": "invalid"
+        },
+        "findings": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/verificationFinding"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "verificationReport": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/validVerificationReport"
+        },
+        {
+          "$ref": "#/$defs/invalidVerificationReport"
+        }
+      ]
+    }
+  }
+}
