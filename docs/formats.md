@@ -394,3 +394,79 @@ The following result is valid. It is also available as
 For a `limit` result with no verified incumbent, all three plan members are
 omitted. Adding only `cut_patterns`, using `null` for `objective_value`, or
 attaching an `invalid` report would make the payload invalid.
+
+## JSON error format version 1
+
+Version 1 is the canonical JSON representation of a failure which prevents the
+command-line interface from returning a normal solution outcome. Its companion
+structural schema is
+[`schemas/error-v1.schema.json`](../schemas/error-v1.schema.json). The error
+format is independent of both the problem and solution format versions.
+
+Expected mathematical outcomes are not error envelopes. Proven infeasibility,
+a declared resource limit, and a valid problem outside a backend's supported
+scope use solution envelopes with `solution_status` values `infeasible`,
+`limit`, and `unsupported`, respectively. A backend which is not installed or
+cannot start is different: it uses an error envelope with
+`backend_unavailable`.
+
+### Envelope and required fields
+
+Every version 1 error is one closed JSON object with exactly these members:
+
+| Member | Type and meaning |
+| --- | --- |
+| `format_version` | The JSON integer `1`. |
+| `error` | The closed error object described below. |
+
+The `error` object has exactly two required members. Neither may be omitted or
+set to `null`:
+
+| Member | Type and meaning |
+| --- | --- |
+| `code` | One of the stable lowercase machine-readable codes below. |
+| `message` | A non-empty human-readable string. Its wording is not stable and callers must not parse it. |
+
+No stack trace, exception class, backend log, host path, or other diagnostic
+field is part of the envelope. Implementations may send such human-oriented
+information to standard error, subject to normal security and privacy rules,
+but must keep the standard-output JSON closed and deterministic.
+
+### Error codes
+
+| `error.code` | Meaning |
+| --- | --- |
+| `invalid_cli_usage` | The invocation cannot be interpreted, such as an unknown option or invalid option value. |
+| `input_read_error` | The selected input source could not be read completely. |
+| `invalid_json` | Input is not one syntactically valid JSON document, including duplicate member names or non-standard numeric constants. |
+| `unsupported_format_version` | JSON is readable, but its problem `format_version` is not supported. |
+| `invalid_problem` | A version 1 problem violates its structural or semantic contract. |
+| `backend_unavailable` | The selected backend cannot be used in the current environment. |
+| `internal_verification_error` | A backend candidate failed Saw's independent verification or a required candidate was missing. |
+| `internal_error` | An unexpected internal or backend failure prevented a trustworthy normal outcome. |
+| `output_write_error` | The selected output could not be written completely; because output itself failed, this envelope is not guaranteed to be observable. |
+
+The codes are category identifiers, not prose and not Python exception names.
+Their spelling and meaning are stable for error format version 1. Adding,
+removing, or redefining a code requires a new error-format version. More
+specific validation findings may appear in a future version, but version 1
+does not expose unstable parser paths or exception text as machine data.
+
+The mapping from normal outcomes and error codes to process exit status, and
+the separation between machine-readable standard output and human diagnostics,
+are defined in [`cli.md`](cli.md).
+
+### Example
+
+This invalid-problem error is also available as
+[`examples/json/error-v1-invalid-problem.json`](../examples/json/error-v1-invalid-problem.json):
+
+```json
+{
+  "format_version": 1,
+  "error": {
+    "code": "invalid_problem",
+    "message": "Demand record 0 has an invalid quantity."
+  }
+}
+```
