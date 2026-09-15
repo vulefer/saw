@@ -3,17 +3,34 @@ from pathlib import Path
 
 import pytest
 
+import saw.serialization
 from saw import (
+    BackendStatus,
+    CutPattern,
     Demand,
+    Diagnostics,
+    ObjectiveStage,
+    ObjectiveValue,
     Problem,
     SerializationError,
     SerializationErrorCode,
+    Solution,
+    SolutionStatus,
     Stock,
+    TerminationReason,
+    VerificationFinding,
+    VerificationFindingCode,
+    VerificationReport,
+    json_from_solution,
     problem_from_json,
 )
+from saw.patterns import Pattern
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 VALID_EXAMPLE_PATH = REPOSITORY_ROOT / "examples" / "json" / "problem-v1-valid.json"
+OPTIMAL_SOLUTION_EXAMPLE_PATH = (
+    REPOSITORY_ROOT / "examples" / "json" / "solution-v1-optimal.json"
+)
 
 MINIMAL_VALID_JSON = json.dumps(
     {"format_version": 1, "stocks": [], "demands": []}
@@ -377,3 +394,492 @@ def test_a_non_empty_demand_array_with_an_empty_stock_array_is_valid() -> None:
 
     assert problem.stocks == ()
     assert len(problem.demands) == 1
+
+
+# =============================================================================
+# json_from_solution: Solution (Python) -> version 1 JSON text
+# =============================================================================
+
+
+def _diagnostics(**overrides: object) -> Diagnostics:
+    fields: dict[str, object] = dict(
+        termination_reason=TerminationReason.COMPLETED,
+        backend_status=BackendStatus.OPTIMAL,
+        elapsed_time=0.01,
+        patterns_generated=4,
+        iterations=3,
+        completed_objective_stages=(
+            ObjectiveStage.STOCK_PIECE_COUNT,
+            ObjectiveStage.TOTAL_LEFTOVER,
+            ObjectiveStage.DISTINCT_PATTERN_COUNT,
+        ),
+        lower_bound=1,
+        upper_bound=1,
+    )
+    fields.update(overrides)
+    return Diagnostics(**fields)
+
+
+def _cut_pattern(
+    stock_id: str = "stock-10",
+    piece_counts: dict[str, int] | None = None,
+    repetitions: int = 1,
+) -> CutPattern:
+    counts = {"demand-4": 1, "demand-6": 1} if piece_counts is None else piece_counts
+    return CutPattern(pattern=Pattern(stock_id, counts), repetitions=repetitions)
+
+
+_OBJECTIVE_VALUE = ObjectiveValue(
+    stock_piece_count=1, total_leftover=0, distinct_pattern_count=1
+)
+_VALID_REPORT = VerificationReport(findings=())
+
+_ALWAYS_REQUIRED_MEMBERS = frozenset({"format_version", "solution_status", "diagnostics"})
+_VERIFIED_PLAN_MEMBERS = frozenset(
+    {"cut_patterns", "objective_value", "verification_report"}
+)
+
+
+def _optimal_solution(**overrides: object) -> Solution:
+    fields: dict[str, object] = dict(
+        solution_status=SolutionStatus.OPTIMAL,
+        cut_patterns=(_cut_pattern(),),
+        objective_value=_OBJECTIVE_VALUE,
+        diagnostics=_diagnostics(),
+        verification_report=_VALID_REPORT,
+    )
+    fields.update(overrides)
+    return Solution(**fields)
+
+
+def _feasible_solution(**overrides: object) -> Solution:
+    fields: dict[str, object] = dict(
+        solution_status=SolutionStatus.FEASIBLE,
+        cut_patterns=(_cut_pattern(),),
+        objective_value=_OBJECTIVE_VALUE,
+        diagnostics=_diagnostics(
+            termination_reason=TerminationReason.TIME_LIMIT,
+            backend_status=BackendStatus.FEASIBLE,
+            completed_objective_stages=(ObjectiveStage.STOCK_PIECE_COUNT,),
+        ),
+        verification_report=_VALID_REPORT,
+    )
+    fields.update(overrides)
+    return Solution(**fields)
+
+
+def _infeasible_solution(**overrides: object) -> Solution:
+    fields: dict[str, object] = dict(
+        solution_status=SolutionStatus.INFEASIBLE,
+        cut_patterns=(),
+        objective_value=None,
+        diagnostics=_diagnostics(
+            backend_status=BackendStatus.INFEASIBLE,
+            completed_objective_stages=(),
+            lower_bound=None,
+            upper_bound=None,
+        ),
+        verification_report=None,
+    )
+    fields.update(overrides)
+    return Solution(**fields)
+
+
+def _limit_without_plan_solution(**overrides: object) -> Solution:
+    fields: dict[str, object] = dict(
+        solution_status=SolutionStatus.LIMIT,
+        cut_patterns=(),
+        objective_value=None,
+        diagnostics=_diagnostics(
+            termination_reason=TerminationReason.TIME_LIMIT,
+            backend_status=BackendStatus.LIMIT_REACHED,
+            completed_objective_stages=(ObjectiveStage.STOCK_PIECE_COUNT,),
+            lower_bound=1,
+            upper_bound=None,
+        ),
+        verification_report=None,
+    )
+    fields.update(overrides)
+    return Solution(**fields)
+
+
+def _limit_with_plan_solution(**overrides: object) -> Solution:
+    fields: dict[str, object] = dict(
+        solution_status=SolutionStatus.LIMIT,
+        cut_patterns=(_cut_pattern(),),
+        objective_value=_OBJECTIVE_VALUE,
+        diagnostics=_diagnostics(
+            termination_reason=TerminationReason.TIME_LIMIT,
+            backend_status=BackendStatus.LIMIT_REACHED,
+            completed_objective_stages=(ObjectiveStage.STOCK_PIECE_COUNT,),
+            upper_bound=1,
+        ),
+        verification_report=_VALID_REPORT,
+    )
+    fields.update(overrides)
+    return Solution(**fields)
+
+
+def _unsupported_solution(**overrides: object) -> Solution:
+    fields: dict[str, object] = dict(
+        solution_status=SolutionStatus.UNSUPPORTED,
+        cut_patterns=(),
+        objective_value=None,
+        diagnostics=_diagnostics(
+            termination_reason=TerminationReason.UNSUPPORTED_PROBLEM,
+            backend_status=BackendStatus.NOT_RUN,
+            completed_objective_stages=(),
+            lower_bound=None,
+            upper_bound=None,
+        ),
+        verification_report=None,
+    )
+    fields.update(overrides)
+    return Solution(**fields)
+
+
+def _error_solution(**overrides: object) -> Solution:
+    fields: dict[str, object] = dict(
+        solution_status=SolutionStatus.ERROR,
+        cut_patterns=(),
+        objective_value=None,
+        diagnostics=_diagnostics(
+            termination_reason=TerminationReason.BACKEND_FAILURE,
+            backend_status=BackendStatus.FAILED,
+            completed_objective_stages=(),
+            lower_bound=None,
+            upper_bound=None,
+        ),
+        verification_report=None,
+    )
+    fields.update(overrides)
+    return Solution(**fields)
+
+
+# --- Matches the documented example exactly ---------------------------------
+
+
+def test_json_from_solution_matches_the_documented_optimal_example() -> None:
+    solution = _optimal_solution()
+
+    text = json_from_solution(solution)
+
+    assert json.loads(text) == json.loads(
+        OPTIMAL_SOLUTION_EXAMPLE_PATH.read_text(encoding="utf-8")
+    )
+
+
+# --- Every public status has direct, unambiguous coverage ------------------
+
+
+@pytest.mark.parametrize(
+    ("solution", "expects_verified_plan"),
+    [
+        (_optimal_solution(), True),
+        (_feasible_solution(), True),
+        (_infeasible_solution(), False),
+        (_limit_without_plan_solution(), False),
+        (_limit_with_plan_solution(), True),
+        (_unsupported_solution(), False),
+        (_error_solution(), False),
+    ],
+    ids=[
+        "optimal",
+        "feasible",
+        "infeasible",
+        "limit-without-plan",
+        "limit-with-plan",
+        "unsupported",
+        "error",
+    ],
+)
+def test_verified_plan_group_presence_matches_the_status_table(
+    solution: Solution, expects_verified_plan: bool
+) -> None:
+    payload = json.loads(json_from_solution(solution))
+
+    present_plan_members = _VERIFIED_PLAN_MEMBERS & payload.keys()
+    if expects_verified_plan:
+        assert present_plan_members == _VERIFIED_PLAN_MEMBERS
+    else:
+        assert present_plan_members == set()
+
+    # Forbidden means omitted outright -- never present as null or empty.
+    assert payload.keys() == _ALWAYS_REQUIRED_MEMBERS | (
+        _VERIFIED_PLAN_MEMBERS if expects_verified_plan else set()
+    )
+
+
+def test_an_empty_cut_patterns_array_is_a_real_verified_plan_not_an_absent_one() -> None:
+    # A problem with no demand has a genuine, verified zero-stock optimal
+    # plan. It must still carry the full verified-plan group.
+    solution = _optimal_solution(
+        cut_patterns=(),
+        objective_value=ObjectiveValue(
+            stock_piece_count=0, total_leftover=0, distinct_pattern_count=0
+        ),
+    )
+
+    payload = json.loads(json_from_solution(solution))
+
+    assert payload["cut_patterns"] == []
+    assert payload["objective_value"] == {
+        "stock_piece_count": 0,
+        "total_leftover": 0,
+        "distinct_pattern_count": 0,
+    }
+    assert payload["verification_report"] == {"result": "valid", "findings": []}
+
+
+# --- IDs, objective components, stages, bounds round-trip exactly ----------
+
+
+def test_cut_pattern_ids_and_piece_counts_round_trip_by_name_not_position() -> None:
+    solution = _optimal_solution(
+        cut_patterns=(
+            _cut_pattern(
+                stock_id="stock-a",
+                piece_counts={"demand-z": 3, "demand-a": 2},
+                repetitions=5,
+            ),
+        ),
+        objective_value=ObjectiveValue(
+            stock_piece_count=5, total_leftover=0, distinct_pattern_count=1
+        ),
+    )
+
+    payload = json.loads(json_from_solution(solution))
+
+    assert payload["cut_patterns"] == [
+        {
+            "stock_id": "stock-a",
+            "piece_counts": {"demand-z": 3, "demand-a": 2},
+            "repetitions": 5,
+        }
+    ]
+
+
+def test_objective_value_components_round_trip_by_name() -> None:
+    solution = _optimal_solution(
+        objective_value=ObjectiveValue(
+            stock_piece_count=7, total_leftover=13, distinct_pattern_count=2
+        )
+    )
+
+    payload = json.loads(json_from_solution(solution))
+
+    assert payload["objective_value"] == {
+        "stock_piece_count": 7,
+        "total_leftover": 13,
+        "distinct_pattern_count": 2,
+    }
+
+
+def test_completed_objective_stages_round_trip_in_order() -> None:
+    solution = _feasible_solution(
+        diagnostics=_diagnostics(
+            termination_reason=TerminationReason.TIME_LIMIT,
+            backend_status=BackendStatus.FEASIBLE,
+            completed_objective_stages=(
+                ObjectiveStage.STOCK_PIECE_COUNT,
+                ObjectiveStage.TOTAL_LEFTOVER,
+            ),
+        )
+    )
+
+    payload = json.loads(json_from_solution(solution))
+
+    assert payload["diagnostics"]["completed_objective_stages"] == [
+        "stock_piece_count",
+        "total_leftover",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("lower_bound", "upper_bound"),
+    [(None, None), (3, None), (None, 3), (3, 3)],
+    ids=["both-null", "lower-only", "upper-only", "both-numeric"],
+)
+def test_bounds_round_trip_including_null(
+    lower_bound: int | None, upper_bound: int | None
+) -> None:
+    solution = _limit_without_plan_solution(
+        diagnostics=_diagnostics(
+            termination_reason=TerminationReason.TIME_LIMIT,
+            backend_status=BackendStatus.LIMIT_REACHED,
+            completed_objective_stages=(),
+            lower_bound=lower_bound,
+            upper_bound=upper_bound,
+        )
+    )
+
+    payload = json.loads(json_from_solution(solution))
+
+    assert payload["diagnostics"]["lower_bound"] == lower_bound
+    assert payload["diagnostics"]["upper_bound"] == upper_bound
+
+
+def test_verification_report_round_trips_as_valid_with_empty_findings() -> None:
+    solution = _optimal_solution()
+
+    payload = json.loads(json_from_solution(solution))
+
+    assert payload["verification_report"] == {"result": "valid", "findings": []}
+
+
+@pytest.mark.parametrize(
+    "finding",
+    [
+        VerificationFinding(
+            code=VerificationFindingCode.UNKNOWN_DEMAND_ID,
+            message="The pattern refers to an unknown demand.",
+            demand_id="missing-demand",
+            pattern_index=0,
+        ),
+        VerificationFinding(
+            code=VerificationFindingCode.UNKNOWN_STOCK_ID,
+            message="The pattern refers to an unknown stock.",
+            stock_id="missing-stock",
+            pattern_index=1,
+        ),
+        VerificationFinding(
+            code=VerificationFindingCode.OBJECTIVE_MISMATCH,
+            message="Reported objective does not match the plan.",
+        ),
+    ],
+    ids=["demand-context", "stock-context", "no-context"],
+)
+def test_verification_findings_round_trip_present_context_only(
+    finding: VerificationFinding,
+) -> None:
+    # A standalone (unattached) report is used here because a version 1
+    # solution never carries an invalid report -- see
+    # test_a_forbidden_or_invalid_verification_report_is_rejected below. This
+    # exercises the same finding-payload logic that backs every attached
+    # report's (always-empty) findings array.
+    report = VerificationReport(findings=(finding,))
+
+    payload = saw.serialization._verification_report_payload(report)  # noqa: SLF001
+
+    expected: dict[str, object] = {"code": finding.code.value, "message": finding.message}
+    if finding.stock_id is not None:
+        expected["stock_id"] = finding.stock_id
+    if finding.demand_id is not None:
+        expected["demand_id"] = finding.demand_id
+    if finding.pattern_index is not None:
+        expected["pattern_index"] = finding.pattern_index
+
+    assert payload == {"result": "invalid", "findings": [expected]}
+
+
+# --- Fields invalid for a status are omitted, never null placeholders ------
+
+
+@pytest.mark.parametrize(
+    "solution",
+    [
+        _infeasible_solution(),
+        _limit_without_plan_solution(),
+        _unsupported_solution(),
+        _error_solution(),
+    ],
+    ids=["infeasible", "limit-without-plan", "unsupported", "error"],
+)
+def test_non_plan_statuses_never_emit_plan_members_as_null(solution: Solution) -> None:
+    payload = json.loads(json_from_solution(solution))
+
+    for member in _VERIFIED_PLAN_MEMBERS:
+        assert member not in payload
+
+
+# --- Determinism -------------------------------------------------------------
+
+
+def test_serialization_is_deterministic_for_equivalent_results() -> None:
+    first = json_from_solution(_optimal_solution())
+    second = json_from_solution(_optimal_solution())
+
+    assert first == second
+
+
+def test_serialization_is_deterministic_across_repeated_calls_on_one_value() -> None:
+    solution = _limit_with_plan_solution()
+
+    assert json_from_solution(solution) == json_from_solution(solution)
+
+
+# --- Contract violations are rejected, not silently miswritten -------------
+
+
+def test_a_status_requiring_a_plan_without_a_verification_report_is_rejected() -> None:
+    solution = _optimal_solution(verification_report=None)
+
+    with pytest.raises(SerializationError) as excinfo:
+        json_from_solution(solution)
+
+    assert excinfo.value.code is SerializationErrorCode.SCHEMA_VIOLATION
+    assert excinfo.value.field == "verification_report"
+
+
+def test_a_status_requiring_a_plan_without_an_objective_value_is_rejected() -> None:
+    solution = _optimal_solution(objective_value=None)
+
+    with pytest.raises(SerializationError) as excinfo:
+        json_from_solution(solution)
+
+    assert excinfo.value.code is SerializationErrorCode.SCHEMA_VIOLATION
+    assert excinfo.value.field == "objective_value"
+
+
+@pytest.mark.parametrize(
+    "make_solution",
+    [_infeasible_solution, _unsupported_solution, _error_solution],
+    ids=["infeasible", "unsupported", "error"],
+)
+def test_a_forbidden_or_invalid_verification_report_is_rejected(
+    make_solution,
+) -> None:
+    solution = make_solution(verification_report=_VALID_REPORT)
+
+    with pytest.raises(SerializationError) as excinfo:
+        json_from_solution(solution)
+
+    assert excinfo.value.code is SerializationErrorCode.SCHEMA_VIOLATION
+    assert excinfo.value.field == "verification_report"
+
+
+def test_an_invalid_verification_report_cannot_be_attached_to_a_published_plan() -> None:
+    invalid_report = VerificationReport(
+        findings=(
+            VerificationFinding(
+                code=VerificationFindingCode.OBJECTIVE_MISMATCH,
+                message="Reported objective does not match the plan.",
+            ),
+        )
+    )
+    solution = _feasible_solution(verification_report=invalid_report)
+
+    with pytest.raises(SerializationError) as excinfo:
+        json_from_solution(solution)
+
+    assert excinfo.value.code is SerializationErrorCode.SCHEMA_VIOLATION
+    assert excinfo.value.field == "verification_report"
+
+
+@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
+def test_a_non_finite_elapsed_time_is_rejected(non_finite: float) -> None:
+    solution = _infeasible_solution(
+        diagnostics=_diagnostics(
+            backend_status=BackendStatus.INFEASIBLE,
+            completed_objective_stages=(),
+            lower_bound=None,
+            upper_bound=None,
+            elapsed_time=non_finite,
+        )
+    )
+
+    with pytest.raises(SerializationError) as excinfo:
+        json_from_solution(solution)
+
+    assert excinfo.value.code is SerializationErrorCode.SCHEMA_VIOLATION
+    assert excinfo.value.field == "elapsed_time"

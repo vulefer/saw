@@ -1,36 +1,61 @@
-"""JSON serialization boundary for version 1 Saw problem requests.
+"""JSON serialization boundary for version 1 Saw problem and solution data.
 
 This module converts a versioned JSON problem request into the existing
 immutable :class:`~saw.models.Problem`, :class:`~saw.models.Stock`, and
-:class:`~saw.models.Demand` models. The full version 1 JSON problem format
-contract is documented in ``docs/formats.md``; the companion structural
-schema is ``schemas/problem-v1.schema.json``. This module is the
-authoritative implementation of the rules JSON Schema cannot express
-(duplicate member names, integer spelling, and ID uniqueness), so it does
-not depend on a JSON-schema library at run time.
+:class:`~saw.models.Demand` models, and converts an existing public
+:class:`~saw.models.Solution` into the version 1 JSON solution result. The
+full version 1 JSON problem and solution format contracts are documented in
+``docs/formats.md``; the companion structural schemas are
+``schemas/problem-v1.schema.json`` and ``schemas/solution-v1.schema.json``.
+This module is the authoritative implementation of the rules JSON Schema
+cannot express (duplicate member names, integer spelling, ID uniqueness, and
+-- on the solution side -- which fields a given ``solution_status`` requires
+or forbids), so it does not depend on a JSON-schema library at run time.
 
-Only JSON *shape* is enforced here: JSON syntax, the closed set of object
-members, and primitive types and spelling. Semantic rules -- non-empty IDs,
-positive lengths and quantities, and stock/demand ID uniqueness -- are
-enforced by :func:`saw.validation.validate_problem`, not reimplemented in
-this module, so there is exactly one place those rules live.
+Only JSON *shape* is enforced on the read side: JSON syntax, the closed set
+of object members, and primitive types and spelling. Semantic rules --
+non-empty IDs, positive lengths and quantities, and stock/demand ID
+uniqueness -- are enforced by :func:`saw.validation.validate_problem`, not
+reimplemented in this module, so there is exactly one place those rules
+live.
+
+On the write side, :func:`json_from_solution` trusts the fields of a
+well-formed :class:`~saw.models.Solution` and is responsible only for
+choosing, from ``solution_status`` alone, which of the verified-plan members
+(``cut_patterns``, ``objective_value``, ``verification_report``) to include.
+It does not re-run verification; it raises
+:class:`~saw.exceptions.SerializationError` if the given ``Solution`` cannot
+be represented without contradicting its own declared status.
 
 This module knows nothing about a command-line interface, standard streams,
 exit codes, or input sources. It only turns JSON text that has already been
-read into a :class:`~saw.models.Problem`, or raises
-:class:`~saw.exceptions.SerializationError`.
+read into a :class:`~saw.models.Problem`, or a :class:`~saw.models.Solution`
+into JSON text, raising :class:`~saw.exceptions.SerializationError` when it
+cannot.
 """
 
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable, Iterable
 
 from saw.exceptions import SerializationError, SerializationErrorCode, ValidationError
-from saw.models import Demand, Problem, Stock
+from saw.models import (
+    CutPattern,
+    Demand,
+    Diagnostics,
+    ObjectiveValue,
+    Problem,
+    Solution,
+    SolutionStatus,
+    Stock,
+    VerificationFinding,
+    VerificationReport,
+)
 from saw.validation import validate_problem
 
-__all__ = ("SUPPORTED_FORMAT_VERSION", "problem_from_json")
+__all__ = ("SUPPORTED_FORMAT_VERSION", "json_from_solution", "problem_from_json")
 
 #: The only ``format_version`` value this module accepts.
 SUPPORTED_FORMAT_VERSION = 1
@@ -38,6 +63,21 @@ SUPPORTED_FORMAT_VERSION = 1
 _PROBLEM_MEMBERS = frozenset({"format_version", "stocks", "demands"})
 _STOCK_MEMBERS = frozenset({"stock_id", "material_id", "length", "quantity"})
 _DEMAND_MEMBERS = frozenset({"demand_id", "material_id", "length", "quantity"})
+
+#: Statuses whose verified-plan group (``cut_patterns``, ``objective_value``,
+#: ``verification_report``) is always required, per ``docs/formats.md``.
+_STATUSES_REQUIRING_VERIFIED_PLAN = frozenset(
+    {SolutionStatus.OPTIMAL, SolutionStatus.FEASIBLE}
+)
+
+#: Statuses whose verified-plan group is always forbidden.
+_STATUSES_FORBIDDING_VERIFIED_PLAN = frozenset(
+    {SolutionStatus.INFEASIBLE, SolutionStatus.UNSUPPORTED, SolutionStatus.ERROR}
+)
+
+#: The only status whose verified-plan group is conditional: present in full
+#: with a valid report, or absent in full.
+_STATUS_WITH_OPTIONAL_VERIFIED_PLAN = SolutionStatus.LIMIT
 
 
 class _JsonSyntaxError(ValueError):
@@ -256,3 +296,190 @@ def _require_integer(value: object, record_kind: str, index: int, field: str) ->
             field=field,
         )
     return value
+
+
+# --- Solution serialization (Python -> JSON) --------------------------------
+
+
+def json_from_solution(solution: Solution) -> str:
+    """Serialize a public :class:`~saw.models.Solution` as version 1 JSON text.
+
+    The verified-plan group (``cut_patterns``, ``objective_value``, and
+    ``verification_report``) is included or omitted based only on
+    ``solution.solution_status`` -- and, for ``limit``, on whether a verified
+    incumbent is present -- never on whether ``solution.cut_patterns`` happens
+    to be empty. An empty ``cut_patterns`` array is a real, verified
+    zero-stock plan and is represented the same way as any other verified
+    plan; it is never treated as an absent one.
+
+    Args:
+        solution: The solution to serialize, as documented in
+            ``docs/formats.md``.
+
+    Returns:
+        The equivalent version 1 JSON solution document as text.
+
+    Raises:
+        SerializationError: if ``solution.solution_status`` requires a
+            verified plan but ``solution.verification_report`` is missing;
+            if ``solution.solution_status`` forbids a verified plan but a
+            ``verification_report`` is present anyway; if a present
+            ``verification_report`` is not itself valid (an invalid report is
+            never evidence for a published plan); or if
+            ``solution.diagnostics.elapsed_time`` is not a finite number.
+    """
+    payload = _solution_payload(solution)
+    try:
+        return json.dumps(payload, allow_nan=False)
+    except ValueError as error:
+        # allow_nan=False turns a non-finite elapsed_time into a ValueError
+        # instead of writing non-standard JSON (NaN/Infinity) to the wire.
+        raise SerializationError(
+            "diagnostics.elapsed_time must be a finite JSON number.",
+            code=SerializationErrorCode.SCHEMA_VIOLATION,
+            field="elapsed_time",
+        ) from error
+
+
+def _solution_payload(solution: Solution) -> dict[str, object]:
+    includes_plan = _includes_verified_plan(solution)
+
+    payload: dict[str, object] = {
+        "format_version": SUPPORTED_FORMAT_VERSION,
+        "solution_status": solution.solution_status.value,
+    }
+
+    if includes_plan:
+        payload["cut_patterns"] = [
+            _cut_pattern_payload(cut_pattern) for cut_pattern in solution.cut_patterns
+        ]
+        payload["objective_value"] = _objective_value_payload(solution.objective_value)
+
+    payload["diagnostics"] = _diagnostics_payload(solution.diagnostics)
+
+    if includes_plan:
+        payload["verification_report"] = _verification_report_payload(
+            solution.verification_report
+        )
+
+    return payload
+
+
+def _includes_verified_plan(solution: Solution) -> bool:
+    """Decide whether the verified-plan group belongs in the output.
+
+    This is the single place that maps ``solution_status`` to plan-group
+    presence, per the table in ``docs/formats.md``. It also enforces that the
+    ``Solution`` given does not contradict its own declared status, so a
+    caller cannot accidentally under- or over-report the plan group by
+    passing an inconsistent value: every field the plan group needs is
+    checked for presence up front, so ``_solution_payload`` can read it
+    unconditionally once this returns ``True``.
+    """
+    status = solution.solution_status
+    has_report = solution.verification_report is not None
+
+    if has_report and not solution.verification_report.is_valid:
+        raise SerializationError(
+            "verification_report must be valid to be attached to a "
+            "published solution; an invalid report is never evidence for a "
+            "published plan.",
+            code=SerializationErrorCode.SCHEMA_VIOLATION,
+            field="verification_report",
+        )
+
+    if status in _STATUSES_FORBIDDING_VERIFIED_PLAN:
+        if has_report:
+            raise SerializationError(
+                f"solution_status {status.value!r} forbids a verified plan, "
+                "but verification_report is present.",
+                code=SerializationErrorCode.SCHEMA_VIOLATION,
+                field="verification_report",
+            )
+        return False
+
+    if status in _STATUSES_REQUIRING_VERIFIED_PLAN:
+        should_include = True
+    else:
+        assert status is _STATUS_WITH_OPTIONAL_VERIFIED_PLAN
+        should_include = has_report
+
+    if not should_include:
+        return False
+
+    if not has_report:
+        raise SerializationError(
+            f"solution_status {status.value!r} requires a verified plan, "
+            "but verification_report is missing.",
+            code=SerializationErrorCode.SCHEMA_VIOLATION,
+            field="verification_report",
+        )
+    if solution.objective_value is None:
+        raise SerializationError(
+            f"solution_status {status.value!r} requires a verified plan, "
+            "but objective_value is missing.",
+            code=SerializationErrorCode.SCHEMA_VIOLATION,
+            field="objective_value",
+        )
+    return True
+
+
+def _cut_pattern_payload(cut_pattern: CutPattern) -> dict[str, object]:
+    return {
+        "stock_id": cut_pattern.stock_id,
+        "piece_counts": dict(cut_pattern.piece_counts),
+        "repetitions": cut_pattern.repetitions,
+    }
+
+
+def _objective_value_payload(objective_value: ObjectiveValue) -> dict[str, object]:
+    return {
+        "stock_piece_count": objective_value.stock_piece_count,
+        "total_leftover": objective_value.total_leftover,
+        "distinct_pattern_count": objective_value.distinct_pattern_count,
+    }
+
+
+def _diagnostics_payload(diagnostics: Diagnostics) -> dict[str, object]:
+    if not math.isfinite(diagnostics.elapsed_time):
+        raise SerializationError(
+            "diagnostics.elapsed_time must be a finite JSON number.",
+            code=SerializationErrorCode.SCHEMA_VIOLATION,
+            field="elapsed_time",
+        )
+
+    return {
+        "termination_reason": diagnostics.termination_reason.value,
+        "backend_status": diagnostics.backend_status.value,
+        "elapsed_time": diagnostics.elapsed_time,
+        "patterns_generated": diagnostics.patterns_generated,
+        "iterations": diagnostics.iterations,
+        "completed_objective_stages": [
+            stage.value for stage in diagnostics.completed_objective_stages
+        ],
+        "lower_bound": diagnostics.lower_bound,
+        "upper_bound": diagnostics.upper_bound,
+    }
+
+
+def _verification_report_payload(report: VerificationReport) -> dict[str, object]:
+    return {
+        "result": report.result.value,
+        "findings": [_verification_finding_payload(finding) for finding in report.findings],
+    }
+
+
+def _verification_finding_payload(finding: VerificationFinding) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "code": finding.code.value,
+        "message": finding.message,
+    }
+    # Context fields apply only when present; they are omitted rather than
+    # set to null so absence is unambiguous, matching docs/formats.md.
+    if finding.stock_id is not None:
+        payload["stock_id"] = finding.stock_id
+    if finding.demand_id is not None:
+        payload["demand_id"] = finding.demand_id
+    if finding.pattern_index is not None:
+        payload["pattern_index"] = finding.pattern_index
+    return payload
