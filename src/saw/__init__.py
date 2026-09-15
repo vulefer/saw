@@ -4,6 +4,8 @@ from saw.exceptions import (
     BackendUnavailableError,
     InternalVerificationError,
     SawError,
+    SerializationError,
+    SerializationErrorCode,
     ValidationError,
     ValidationErrorCode,
 )
@@ -39,6 +41,8 @@ __all__ = (
     "ObjectiveValue",
     "Problem",
     "SawError",
+    "SerializationError",
+    "SerializationErrorCode",
     "Solution",
     "SolutionStatus",
     "SolveOptions",

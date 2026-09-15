@@ -12,6 +12,8 @@ EXPECTED_PUBLIC_API = {
     "ObjectiveValue",
     "Problem",
     "SawError",
+    "SerializationError",
+    "SerializationErrorCode",
     "Solution",
     "SolutionStatus",
     "SolveOptions",

@@ -4,6 +4,8 @@ from saw import (
     BackendUnavailableError,
     InternalVerificationError,
     SawError,
+    SerializationError,
+    SerializationErrorCode,
     ValidationError,
     ValidationErrorCode,
 )
@@ -14,6 +16,7 @@ from saw import SolutionStatus
     "exception_type",
     [
         ValidationError,
+        SerializationError,
         BackendUnavailableError,
         InternalVerificationError,
     ],
@@ -60,6 +63,60 @@ def test_validation_error_defaults_to_a_stable_general_code() -> None:
     assert error.record_index is None
     assert error.field is None
     assert error.conflicting_ids == ()
+
+
+def test_serialization_error_preserves_stable_code_and_context() -> None:
+    error = SerializationError(
+        "Stock length must be a positive integer.",
+        code=SerializationErrorCode.SCHEMA_VIOLATION,
+        record="stock",
+        record_index=2,
+        field="length",
+    )
+
+    assert str(error) == "Stock length must be a positive integer."
+    assert error.code is SerializationErrorCode.SCHEMA_VIOLATION
+    assert error.record == "stock"
+    assert error.record_index == 2
+    assert error.field == "length"
+
+
+def test_serialization_error_preserves_its_human_readable_message() -> None:
+    message = "Input is not valid JSON."
+    error = SerializationError(
+        message,
+        code=SerializationErrorCode.INVALID_JSON,
+    )
+
+    assert str(error) == message
+
+
+def test_serialization_error_context_is_optional() -> None:
+    error = SerializationError(
+        "Input is not valid JSON.",
+        code=SerializationErrorCode.INVALID_JSON,
+    )
+
+    assert error.record is None
+    assert error.record_index is None
+    assert error.field is None
+
+
+def test_serialization_error_requires_an_explicit_category() -> None:
+    with pytest.raises(TypeError, match="code"):
+        SerializationError("Serialized input is invalid.")  # type: ignore[call-arg]
+
+
+def test_serialization_error_categories_have_stable_values() -> None:
+    assert {
+        code.name: code.value
+        for code in SerializationErrorCode
+    } == {
+        "INVALID_JSON": "invalid_json",
+        "UNSUPPORTED_FORMAT_VERSION": "unsupported_format_version",
+        "SCHEMA_VIOLATION": "schema_violation",
+        "SEMANTIC_VALIDATION": "semantic_validation",
+    }
 
 
 def test_backend_error_preserves_chained_internal_cause() -> None:
