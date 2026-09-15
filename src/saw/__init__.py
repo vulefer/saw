@@ -26,6 +26,7 @@ from saw.models import (
     VerificationReport,
     VerificationResult,
 )
+from saw.serialization import problem_from_json
 from saw.solve import SolveOptions, solve
 from saw.validation import validate_problem
 from saw.verification import verify_solution
@@ -54,6 +55,7 @@ __all__ = (
     "VerificationFindingCode",
     "VerificationReport",
     "VerificationResult",
+    "problem_from_json",
     "solve",
     "validate_problem",
     "verify_solution",
