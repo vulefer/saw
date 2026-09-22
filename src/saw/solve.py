@@ -31,8 +31,11 @@ class SolveOptions:
     # backend selection wrapper
 
     backend: str = "exact_enumerated"
-    time_limit_seconds: float | None = None
-    pattern_limit: int | None = None
+    # v0.2.0 safe defaults per docs/resource-limits.md's configuration
+    # table: omitting an option must not mean "unlimited". Pass None
+    # explicitly to disable a given limit for a call.
+    time_limit_seconds: float | None = 30.0
+    pattern_limit: int | None = 50_000
     # Preflight size guards, checked before backend availability, support,
     # or pattern enumeration. Unlike time_limit_seconds and pattern_limit,
     # these two are enforced by solve() itself (see docs/resource-limits.md),

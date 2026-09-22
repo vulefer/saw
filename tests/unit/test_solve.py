@@ -138,7 +138,13 @@ def test_default_backend_is_selected_through_the_strategy_registry(
     assert result.solution_status is SolutionStatus.OPTIMAL
     assert backend.calls == ["check_availability", "check_support", "solve"]
     assert backend.received_problem is problem
-    assert backend.received_options == BackendOptions()
+    # docs/resource-limits.md's v0.2.0 defaults: omitting SolveOptions
+    # entirely must still apply the safe 30-second / 50,000-pattern
+    # defaults, not reach the backend unlimited.
+    assert backend.received_options == BackendOptions(
+        time_limit_seconds=30.0,
+        pattern_limit=50_000,
+    )
 
 
 def test_backend_can_be_selected_explicitly_and_receives_resource_options(
