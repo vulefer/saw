@@ -32,3 +32,6 @@ env/
 # Operating-system metadata
 .DS_Store
 Thumbs.db
+
+linear_api.txt
+*.csv
