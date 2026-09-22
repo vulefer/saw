@@ -36,6 +36,7 @@ from saw.models import (
     TerminationReason,
 )
 from saw.patterns import Pattern, enumerate_patterns_for_problem
+from saw.timing import Deadline
 
 
 def _termination_reason(
@@ -72,25 +73,78 @@ def _stopped_backend_result(
     *,
     elapsed_time: float,
     completed_objective_stages: tuple[ObjectiveStage, ...],
+    iterations: int,
     proven_stock_count: int | None = None,
 ) -> UnverifiedBackendResult:
-    # A FEASIBLE status explicitly guarantees an integer incumbent. Other
-    # incomplete statuses do not, so they must not expose model values.
+    # ``iterations`` is the number of backend solver invocations
+    # (adapter.solve() calls) actually attempted for this solve() call --
+    # not merely the number of stages proved complete. A stage stopped
+    # before its own solve() was ever called (the shared deadline was
+    # already spent) contributes 0 to this count; a stage whose solve()
+    # was called and returned a non-terminal status still contributes 1,
+    # even though it did not itself complete. Every caller below passes
+    # the exact count for its own stop point so this field stays truthful
+    # (see docs/formats.md, "Diagnostics").
+    # Two situations guarantee pattern_variables already holds a complete,
+    # constraint-satisfying assignment for the *whole* model (every demand
+    # exactly met, every stock bound respected -- see
+    # build_primary_stock_count_model), not just a partial or in-progress
+    # one:
+    #
+    #   1. A FEASIBLE status: the adapter's own solve() call found and
+    #      reported an integer incumbent before its allotted time ran out,
+    #      even though it could not also prove that incumbent optimal.
+    #
+    #   2. backend_status is LIMIT_REACHED *and* completed_objective_stages
+    #      is non-empty. LIMIT_REACHED is never produced by the adapter
+    #      (see translate_pulp_status): the pipeline only constructs it
+    #      itself, at the "the next stage's remaining budget is already
+    #      <= 0" call sites. When that happens with at least one completed
+    #      stage behind it, the *previous* stage already solved this same
+    #      model to a proven optimum and the next stage's solve() was never
+    #      even attempted -- so pattern_variables is exactly that previous
+    #      stage's untouched, fully-solved state, not a guess. Per
+    #      docs/resource-limits.md, "Earlier-stage incumbents remain
+    #      eligible after a later stage reaches the time limit because
+    #      fixing already-proved objective values preserves feasibility."
+    #      (When completed_objective_stages is empty instead, the deadline
+    #      ran out before any stage was ever solved, so no such state
+    #      exists to extract.)
+    #
+    # Every other incomplete status (NOT_SOLVED, an adapter-side INFEASIBLE
+    # at a later stage, UNKNOWN, ...) does not guarantee a solved model
+    # state and must not expose model values.
+    has_prior_stage_incumbent = (
+        backend_status is BackendStatus.LIMIT_REACHED
+        and len(completed_objective_stages) > 0
+    )
+
     candidate = None
-    if backend_status is BackendStatus.FEASIBLE:
+    reported_backend_status = backend_status
+    if backend_status is BackendStatus.FEASIBLE or has_prior_stage_incumbent:
         candidate = extract_current_candidate(
             problem,
             pattern_variables,
         )
+        # A verified prior-stage optimum is a genuine incumbent, just one
+        # that is only proved for the completed prefix of the lexicographic
+        # objective -- report it the same way solve() already reports any
+        # unproved-but-available incumbent (BackendStatus.FEASIBLE), never
+        # as LIMIT_REACHED, which by contract (see
+        # docs/resource-limits.md, "Termination and incumbent rules") never
+        # carries a candidate.
+        reported_backend_status = BackendStatus.FEASIBLE
 
     return UnverifiedBackendResult(
         candidate=candidate,
         diagnostics=Diagnostics(
-            termination_reason=_termination_reason(backend_status, options),
-            backend_status=backend_status,
+            termination_reason=_termination_reason(
+                reported_backend_status, options,
+            ),
+            backend_status=reported_backend_status,
             elapsed_time=elapsed_time,
             patterns_generated=len(pattern_variables),
-            iterations=1,
+            iterations=iterations,
             completed_objective_stages=completed_objective_stages,
             lower_bound=proven_stock_count,
             upper_bound=(
@@ -149,6 +203,115 @@ def _no_pattern_infeasible_result() -> UnverifiedBackendResult:
     )
 
 
+def _pattern_limit_result(patterns_generated: int) -> UnverifiedBackendResult:
+    """Return the discarded-enumeration outcome for a pattern_limit hit.
+
+    Per the pattern_limit row of docs/resource-limits.md, a limit hit claims
+    no incumbent: the partial pattern set that tripped the limit is
+    discarded in ``enumerate_patterns_for_problem`` and never reaches model
+    construction, so it can never be optimized as if it were complete.
+    """
+
+    return UnverifiedBackendResult(
+        candidate=None,
+        diagnostics=Diagnostics(
+            termination_reason=TerminationReason.PATTERN_LIMIT,
+            backend_status=BackendStatus.LIMIT_REACHED,
+            elapsed_time=0.0,
+            patterns_generated=patterns_generated,
+            iterations=0,
+            completed_objective_stages=(),
+            lower_bound=None,
+            upper_bound=None,
+        ),
+    )
+
+
+def _time_limit_enumeration_result(
+    patterns_generated: int,
+) -> UnverifiedBackendResult:
+    """Return the discarded-enumeration outcome for a deadline hit mid-enumeration.
+
+    Mirrors ``_pattern_limit_result``: per docs/resource-limits.md a partial
+    pattern set is just as unsound to optimize over when the shared
+    end-to-end deadline runs out as it is when ``pattern_limit`` is hit, so
+    it is discarded the same way and never reaches model construction.
+    Unlike ``_pattern_limit_result``, ``patterns_generated`` reports however
+    many patterns had actually been produced when the deadline passed, not
+    a configured ceiling (see the "End-to-end time" row of the termination
+    table in docs/resource-limits.md).
+    """
+
+    return UnverifiedBackendResult(
+        candidate=None,
+        diagnostics=Diagnostics(
+            termination_reason=TerminationReason.TIME_LIMIT,
+            backend_status=BackendStatus.LIMIT_REACHED,
+            elapsed_time=0.0,
+            patterns_generated=patterns_generated,
+            iterations=0,
+            completed_objective_stages=(),
+            lower_bound=None,
+            upper_bound=None,
+        ),
+    )
+
+
+def _backend_failure_result(
+    *,
+    patterns_generated: int,
+    iterations: int,
+    elapsed_time: float,
+) -> UnverifiedBackendResult:
+    """Return the structured BACKEND_FAILURE outcome for a stage whose own
+    adapter.solve() call raised ``PulpAdapterError``.
+
+    ``iterations`` is the number of solver invocations attempted up to and
+    including the failing one (1 for a primary-stage failure, 2 for
+    secondary, 3 for tertiary), matching the meaning documented for
+    ``Diagnostics.iterations``. An unexpected backend failure makes no
+    mathematical claim, so -- per docs/formats.md's error-diagnostics rules
+    -- no objective stage is reported complete and both bounds are ``None``,
+    even when an earlier stage in this same call did reach a proven optimum.
+    """
+
+    return UnverifiedBackendResult(
+        candidate=None,
+        diagnostics=Diagnostics(
+            termination_reason=TerminationReason.BACKEND_FAILURE,
+            backend_status=BackendStatus.FAILED,
+            elapsed_time=elapsed_time,
+            patterns_generated=patterns_generated,
+            iterations=iterations,
+            completed_objective_stages=(),
+            lower_bound=None,
+            upper_bound=None,
+        ),
+    )
+
+
+def _remaining_stage_options(
+    options: BackendOptions,
+    deadline: Deadline,
+) -> BackendOptions | None:
+    """Return the options the next objective stage should receive, or
+    ``None`` if its budget is already spent.
+
+    Recomputes the remaining seconds on the shared ``deadline`` right
+    before an expensive solver call, per docs/resource-limits.md ("One
+    end-to-end time budget"): the secondary and tertiary stages must never
+    receive the originally configured ``time_limit_seconds`` again, only
+    whatever is left of it after validation, enumeration, model building,
+    and any earlier stage. Returns ``None`` when the remainder is not
+    positive, in which case the caller must not start that stage at all.
+    """
+
+    remaining = deadline.remaining_seconds()
+    if remaining is not None and remaining <= 0:
+        return None
+    return replace(options, time_limit_seconds=remaining)
+
+
 def solve_exact_enumerated_pipeline(
     problem: Problem,
     patterns: tuple[Pattern, ...],
@@ -156,6 +319,7 @@ def solve_exact_enumerated_pipeline(
     options: BackendOptions,
     *,
     elapsed_time: float | None = None,
+    deadline: Deadline | None = None,
 ) -> UnverifiedBackendResult:
     started_at = perf_counter()
 
@@ -164,28 +328,79 @@ def solve_exact_enumerated_pipeline(
             return elapsed_time
         return perf_counter() - started_at
 
+    # Per docs/resource-limits.md ("One end-to-end time budget"), every
+    # stage below recomputes what remains of the shared deadline instead of
+    # being handed options.time_limit_seconds -- the originally configured
+    # value -- three times over. A caller that already owns a shared
+    # Deadline (solve(), via ExactEnumeratedBackend.solve()) passes it in;
+    # a caller that only has options.time_limit_seconds (a direct unit
+    # test, or a bare call to this function) gets one anchored to this
+    # pipeline's own start, which reproduces the pre-existing single-call
+    # behaviour exactly.
+    effective_deadline = (
+        deadline
+        if deadline is not None
+        else Deadline.from_start(started_at, options.time_limit_seconds)
+    )
+
     '''---stage 1: stock-count optimization---'''
     model, pattern_variables, stock_count = build_primary_stock_count_model(
         problem,
         patterns,
     )
-    primary_result = solve_primary_stock_count_stage(
-        model,
-        stock_count,
-        adapter,
-        options,
-    )
+
+    stage_1_options = _remaining_stage_options(options, effective_deadline)
+    if stage_1_options is None:
+        return _stopped_backend_result(
+            problem,
+            pattern_variables,
+            BackendStatus.LIMIT_REACHED,
+            options,
+            elapsed_time=current_elapsed_time(),
+            completed_objective_stages=(),
+            iterations=0,
+        )
+
+    try:
+        primary_result = solve_primary_stock_count_stage(
+            model,
+            stock_count,
+            adapter,
+            stage_1_options,
+        )
+    except PulpAdapterError:
+        return _backend_failure_result(
+            patterns_generated=len(pattern_variables),
+            iterations=1,
+            elapsed_time=current_elapsed_time(),
+        )
 
     if primary_result.optimal_stock_count is None:
         return _stopped_backend_result(
             problem,
             pattern_variables,
             primary_result.backend_status,
-            options,
+            stage_1_options,
             elapsed_time=current_elapsed_time(),
             completed_objective_stages=(),
+            iterations=1,
         )
     '''---stage 2: total-leftover optimization---'''
+
+    stage_2_options = _remaining_stage_options(options, effective_deadline)
+    if stage_2_options is None:
+        return _stopped_backend_result(
+            problem,
+            pattern_variables,
+            BackendStatus.LIMIT_REACHED,
+            options,
+            elapsed_time=current_elapsed_time(),
+            completed_objective_stages=(
+                ObjectiveStage.STOCK_PIECE_COUNT,
+            ),
+            iterations=1,
+            proven_stock_count=primary_result.optimal_stock_count,
+        )
 
     total_leftover = configure_secondary_leftover_stage(
         model,
@@ -194,27 +409,51 @@ def solve_exact_enumerated_pipeline(
         stock_count,
         primary_result.optimal_stock_count,
     )
-    secondary_result = solve_secondary_leftover_stage(
-        model,
-        total_leftover,
-        adapter,
-        options,
-    )
+    try:
+        secondary_result = solve_secondary_leftover_stage(
+            model,
+            total_leftover,
+            adapter,
+            stage_2_options,
+        )
+    except PulpAdapterError:
+        return _backend_failure_result(
+            patterns_generated=len(pattern_variables),
+            iterations=2,
+            elapsed_time=current_elapsed_time(),
+        )
 
     if secondary_result.optimal_total_leftover is None:
         return _stopped_backend_result(
             problem,
             pattern_variables,
             secondary_result.backend_status,
-            options,
+            stage_2_options,
             elapsed_time=current_elapsed_time(),
             completed_objective_stages=(
                 ObjectiveStage.STOCK_PIECE_COUNT,
             ),
+            iterations=2,
             proven_stock_count=primary_result.optimal_stock_count,
         )
 
     '''---stage 3: distinct-pattern-count optimization---'''
+    stage_3_options = _remaining_stage_options(options, effective_deadline)
+    if stage_3_options is None:
+        return _stopped_backend_result(
+            problem,
+            pattern_variables,
+            BackendStatus.LIMIT_REACHED,
+            options,
+            elapsed_time=current_elapsed_time(),
+            completed_objective_stages=(
+                ObjectiveStage.STOCK_PIECE_COUNT,
+                ObjectiveStage.TOTAL_LEFTOVER,
+            ),
+            iterations=2,
+            proven_stock_count=primary_result.optimal_stock_count,
+        )
+
     distinct_pattern_count = configure_tertiary_pattern_count_stage(
         model,
         problem,
@@ -222,24 +461,32 @@ def solve_exact_enumerated_pipeline(
         total_leftover,
         secondary_result.optimal_total_leftover,
     )
-    tertiary_result = solve_tertiary_pattern_count_stage(
-        model,
-        distinct_pattern_count,
-        adapter,
-        options,
-    )
+    try:
+        tertiary_result = solve_tertiary_pattern_count_stage(
+            model,
+            distinct_pattern_count,
+            adapter,
+            stage_3_options,
+        )
+    except PulpAdapterError:
+        return _backend_failure_result(
+            patterns_generated=len(pattern_variables),
+            iterations=3,
+            elapsed_time=current_elapsed_time(),
+        )
 
     if tertiary_result.optimal_distinct_pattern_count is None:
         return _stopped_backend_result(
             problem,
             pattern_variables,
             tertiary_result.backend_status,
-            options,
+            stage_3_options,
             elapsed_time=current_elapsed_time(),
             completed_objective_stages=(
                 ObjectiveStage.STOCK_PIECE_COUNT,
                 ObjectiveStage.TOTAL_LEFTOVER,
             ),
+            iterations=3,
             proven_stock_count=primary_result.optimal_stock_count,
         )
 
@@ -268,7 +515,7 @@ class ExactEnumeratedBackend:
             proves_optimality=True,
             proves_infeasibility=True,
             supports_time_limit=True,
-            supports_pattern_limit=False,
+            supports_pattern_limit=True,
             objective_stages=frozenset(ObjectiveStage),
         )
 
@@ -280,14 +527,6 @@ class ExactEnumeratedBackend:
         problem: Problem,
         options: BackendOptions,
     ) -> BackendSupport:
-        if options.pattern_limit is not None:
-            return BackendSupport(
-                supported=False,
-                reason=(
-                    "The exact enumerated backend does not currently support "
-                    "a pattern limit."
-                ),
-            )
         return BackendSupport(supported=True)
 
     def solve(
@@ -296,33 +535,45 @@ class ExactEnumeratedBackend:
         options: BackendOptions,
     ) -> UnverifiedBackendResult:
         started_at = perf_counter()
-        patterns = enumerate_patterns_for_problem(problem)
+
+        # Prefer the shared deadline solve() already anchored (it covers
+        # validation and preflight checks too); a caller that bypasses
+        # solve() and only sets time_limit_seconds gets one anchored here,
+        # which reproduces the pre-existing single-call behaviour exactly.
+        deadline = (
+            options.deadline
+            if options.deadline is not None
+            else Deadline.from_start(started_at, options.time_limit_seconds)
+        )
 
         if not problem.demands:
             result = _empty_demand_result()
-        elif not patterns:
-            result = _no_pattern_infeasible_result()
         else:
-            try:
+            enumeration = enumerate_patterns_for_problem(
+                problem,
+                options.pattern_limit,
+                deadline=deadline,
+            )
+
+            if enumeration.deadline_expired:
+                result = _time_limit_enumeration_result(
+                    enumeration.patterns_generated
+                )
+            elif enumeration.limit_reached:
+                result = _pattern_limit_result(enumeration.patterns_generated)
+            elif not enumeration.patterns:
+                result = _no_pattern_infeasible_result()
+            else:
+                # solve_exact_enumerated_pipeline() catches PulpAdapterError
+                # itself, per stage, and returns a structured BACKEND_FAILURE
+                # result with an accurate `iterations` count -- it never lets
+                # the exception propagate here.
                 result = solve_exact_enumerated_pipeline(
                     problem,
-                    patterns,
+                    enumeration.patterns,
                     self._adapter,
                     options,
-                )
-            except PulpAdapterError:
-                return UnverifiedBackendResult(
-                    candidate=None,
-                    diagnostics=Diagnostics(
-                        termination_reason=TerminationReason.BACKEND_FAILURE,
-                        backend_status=BackendStatus.FAILED,
-                        elapsed_time=perf_counter() - started_at,
-                        patterns_generated=len(patterns),
-                        iterations=1,
-                        completed_objective_stages=(),
-                        lower_bound=None,
-                        upper_bound=None,
-                    ),
+                    deadline=deadline,
                 )
 
         return replace(

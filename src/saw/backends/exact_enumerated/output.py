@@ -161,7 +161,15 @@ def extract_backend_output(
         backend_status=tertiary_result.backend_status,
         elapsed_time=elapsed_time,
         patterns_generated=len(pattern_variables),
-        iterations=1,
+        # A complete pipeline run that reaches extract_backend_output() has,
+        # by construction, made exactly one solver call per lexicographic
+        # stage -- primary, secondary, tertiary -- all three of which proved
+        # optimal (see the guard loop above). `iterations` counts solver
+        # calls attempted, matching the meaning documented in
+        # docs/formats.md, "Diagnostics"; it is not the number of proved
+        # stages restated (that is `len(completed_objective_stages)`), even
+        # though both happen to be `3` on this fully-successful path.
+        iterations=3,
         completed_objective_stages=tuple(
             stage
             for stage, _, _ in stage_results

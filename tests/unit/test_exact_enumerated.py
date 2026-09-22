@@ -1263,7 +1263,11 @@ def test_backend_output_records_objectives_and_diagnostics() -> None:
     assert result.diagnostics.backend_status is BackendStatus.OPTIMAL
     assert result.diagnostics.elapsed_time == 1.25
     assert result.diagnostics.patterns_generated == 0
-    assert result.diagnostics.iterations == 1
+    # All three lexicographic stages were attempted (and each proved
+    # optimal) to reach extract_backend_output(); see docs/formats.md,
+    # "Diagnostics", for why `iterations` counts attempted solver calls,
+    # not `len(completed_objective_stages)` restated.
+    assert result.diagnostics.iterations == 3
     assert result.diagnostics.completed_objective_stages == (
         ObjectiveStage.STOCK_PIECE_COUNT,
         ObjectiveStage.TOTAL_LEFTOVER,
