@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
@@ -35,6 +36,65 @@ class SolveOptions:
 _BACKENDS: dict[str, OptimizationBackend] = {
     "exact_enumerated": ExactEnumeratedBackend(),
 }
+
+
+def _validate_solve_options(options: SolveOptions) -> None:
+    """Reject nonsensical or unsafe option values before backend selection.
+
+    This runs after ``validate_problem`` and before the backend registry is
+    consulted, so a malformed option can never reach ``check_availability``
+    or ``check_support``. It intentionally does not check whether
+    ``options.backend`` names a *registered* backend: that lookup stays in
+    ``_select_backend`` so unknown-backend handling remains deterministic
+    and unaffected by this check.
+
+    Every rejection raises ``ValueError``, matching the resource-limit
+    contract in docs/resource-limits.md: booleans are not numbers, and
+    zero, negative, non-finite, fractional-for-an-integer-limit, or
+    wrong-typed values are all invalid configuration, never a solution
+    result.
+    """
+    _require_backend_identifier(options.backend)
+    _require_optional_finite_positive_number(
+        options.time_limit_seconds, "time_limit_seconds",
+    )
+    _require_optional_positive_integer(options.pattern_limit, "pattern_limit")
+
+
+def _require_backend_identifier(value: object) -> None:
+    if not isinstance(value, str) or value == "":
+        raise ValueError(
+            f"Invalid backend {value!r}: backend must be a non-empty string."
+        )
+
+
+def _require_optional_finite_positive_number(value: object, field: str) -> None:
+    # None disables the limit; every other invalid shape is rejected here so
+    # NaN, infinity, booleans, zero, negative values, and wrong types never
+    # reach backend selection.
+    if value is None:
+        return
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(
+            f"Invalid {field} {value!r}: must be a finite real number "
+            "greater than zero, or None."
+        )
+
+
+def _require_optional_positive_integer(value: object, field: str) -> None:
+    # bool is a subclass of int, so it must be rejected explicitly.
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(
+            f"Invalid {field} {value!r}: must be a positive integer, or "
+            "None."
+        )
 
 
 def _select_backend(
@@ -102,6 +162,8 @@ def solve(
     validate_problem(problem)
 
     effective_options = options or SolveOptions()
+    _validate_solve_options(effective_options)
+
     backend = _select_backend(effective_options.backend, _BACKENDS)
     backend_options = _to_backend_options(effective_options)
 

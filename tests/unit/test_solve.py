@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from importlib import import_module
+from unittest.mock import Mock
 
 import pytest
 
@@ -352,3 +353,169 @@ def test_unknown_backend_id_is_rejected_after_validation() -> None:
 
     with pytest.raises(ValueError, match="Unknown backend 'missing'"):
         solve(problem, SolveOptions(backend="missing"))
+
+
+INVALID_BACKEND_VALUES = [
+    None,
+    123,
+    1.5,
+    True,
+    False,
+    [],
+    "",
+]
+
+
+INVALID_TIME_LIMIT_SECONDS_VALUES = [
+    float("nan"),
+    float("inf"),
+    float("-inf"),
+    True,
+    False,
+    0,
+    0.0,
+    -1,
+    -1.5,
+    "5",
+    [5],
+]
+
+
+INVALID_PATTERN_LIMIT_VALUES = [
+    float("nan"),
+    float("inf"),
+    True,
+    False,
+    0,
+    -1,
+    1.5,
+    5.0,
+    "5",
+    [5],
+]
+
+
+def _assert_backend_selection_never_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Mock:
+    solve_module = import_module("saw.solve")
+    guard = Mock(side_effect=AssertionError("backend selection must not run"))
+    monkeypatch.setattr(solve_module, "_select_backend", guard)
+    return guard
+
+
+@pytest.mark.parametrize("backend", INVALID_BACKEND_VALUES)
+def test_invalid_backend_identifier_is_rejected_before_backend_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    backend: object,
+) -> None:
+    problem = Problem(stocks=(), demands=())
+    guard = _assert_backend_selection_never_runs(monkeypatch)
+
+    with pytest.raises(ValueError, match="backend"):
+        solve(problem, SolveOptions(backend=backend))  # type: ignore[arg-type]
+
+    guard.assert_not_called()
+
+
+@pytest.mark.parametrize("time_limit_seconds", INVALID_TIME_LIMIT_SECONDS_VALUES)
+def test_invalid_time_limit_seconds_is_rejected_before_backend_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    time_limit_seconds: object,
+) -> None:
+    problem = Problem(stocks=(), demands=())
+    guard = _assert_backend_selection_never_runs(monkeypatch)
+
+    with pytest.raises(ValueError, match="time_limit_seconds"):
+        solve(
+            problem,
+            SolveOptions(time_limit_seconds=time_limit_seconds),  # type: ignore[arg-type]
+        )
+
+    guard.assert_not_called()
+
+
+@pytest.mark.parametrize("pattern_limit", INVALID_PATTERN_LIMIT_VALUES)
+def test_invalid_pattern_limit_is_rejected_before_backend_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    pattern_limit: object,
+) -> None:
+    problem = Problem(stocks=(), demands=())
+    guard = _assert_backend_selection_never_runs(monkeypatch)
+
+    with pytest.raises(ValueError, match="pattern_limit"):
+        solve(
+            problem,
+            SolveOptions(pattern_limit=pattern_limit),  # type: ignore[arg-type]
+        )
+
+    guard.assert_not_called()
+
+
+def test_invalid_options_never_invoke_a_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    problem = Problem(stocks=(), demands=())
+    backend = RecordingBackend(_empty_candidate_result())
+    _install_backend(monkeypatch, "exact_enumerated", backend)
+
+    with pytest.raises(ValueError, match="pattern_limit"):
+        solve(problem, SolveOptions(pattern_limit=-1))
+
+    assert backend.calls == []
+
+
+@pytest.mark.parametrize(
+    ("time_limit_seconds", "pattern_limit"),
+    [
+        (None, None),
+        (30.0, 50_000),
+        (0.001, 1),
+    ],
+)
+def test_valid_options_pass_validation_and_reach_the_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    time_limit_seconds: float | None,
+    pattern_limit: int | None,
+) -> None:
+    problem = Problem(stocks=(), demands=())
+    backend = RecordingBackend(_empty_candidate_result())
+    _install_backend(monkeypatch, "exact_enumerated", backend)
+
+    solve(
+        problem,
+        SolveOptions(
+            time_limit_seconds=time_limit_seconds,
+            pattern_limit=pattern_limit,
+        ),
+    )
+
+    assert backend.calls == ["check_availability", "check_support", "solve"]
+
+
+def test_option_validation_runs_after_problem_validation() -> None:
+    invalid_problem = Problem(
+        stocks=(Stock("stock", "steel", 0, 1),),
+        demands=(),
+    )
+
+    with pytest.raises(ValidationError):
+        solve(invalid_problem, SolveOptions(pattern_limit=-1))
+
+
+def test_option_validation_runs_before_unknown_backend_is_reported() -> None:
+    problem = Problem(stocks=(), demands=())
+
+    with pytest.raises(ValueError, match="pattern_limit"):
+        solve(problem, SolveOptions(backend="missing", pattern_limit=-1))
+
+
+def test_unknown_backend_handling_stays_deterministic_across_calls() -> None:
+    problem = Problem(
+        stocks=(Stock("stock", "steel", 10, 1),),
+        demands=(Demand("demand", "steel", 5, 1),),
+    )
+
+    for _ in range(3):
+        with pytest.raises(ValueError, match="Unknown backend 'missing'"):
+            solve(problem, SolveOptions(backend="missing"))
