@@ -75,20 +75,63 @@ def _stopped_backend_result(
     completed_objective_stages: tuple[ObjectiveStage, ...],
     proven_stock_count: int | None = None,
 ) -> UnverifiedBackendResult:
-    # A FEASIBLE status explicitly guarantees an integer incumbent. Other
-    # incomplete statuses do not, so they must not expose model values.
+    # Two situations guarantee pattern_variables already holds a complete,
+    # constraint-satisfying assignment for the *whole* model (every demand
+    # exactly met, every stock bound respected -- see
+    # build_primary_stock_count_model), not just a partial or in-progress
+    # one:
+    #
+    #   1. A FEASIBLE status: the adapter's own solve() call found and
+    #      reported an integer incumbent before its allotted time ran out,
+    #      even though it could not also prove that incumbent optimal.
+    #
+    #   2. backend_status is LIMIT_REACHED *and* completed_objective_stages
+    #      is non-empty. LIMIT_REACHED is never produced by the adapter
+    #      (see translate_pulp_status): the pipeline only constructs it
+    #      itself, at the "the next stage's remaining budget is already
+    #      <= 0" call sites. When that happens with at least one completed
+    #      stage behind it, the *previous* stage already solved this same
+    #      model to a proven optimum and the next stage's solve() was never
+    #      even attempted -- so pattern_variables is exactly that previous
+    #      stage's untouched, fully-solved state, not a guess. Per
+    #      docs/resource-limits.md, "Earlier-stage incumbents remain
+    #      eligible after a later stage reaches the time limit because
+    #      fixing already-proved objective values preserves feasibility."
+    #      (When completed_objective_stages is empty instead, the deadline
+    #      ran out before any stage was ever solved, so no such state
+    #      exists to extract.)
+    #
+    # Every other incomplete status (NOT_SOLVED, an adapter-side INFEASIBLE
+    # at a later stage, UNKNOWN, ...) does not guarantee a solved model
+    # state and must not expose model values.
+    has_prior_stage_incumbent = (
+        backend_status is BackendStatus.LIMIT_REACHED
+        and len(completed_objective_stages) > 0
+    )
+
     candidate = None
-    if backend_status is BackendStatus.FEASIBLE:
+    reported_backend_status = backend_status
+    if backend_status is BackendStatus.FEASIBLE or has_prior_stage_incumbent:
         candidate = extract_current_candidate(
             problem,
             pattern_variables,
         )
+        # A verified prior-stage optimum is a genuine incumbent, just one
+        # that is only proved for the completed prefix of the lexicographic
+        # objective -- report it the same way solve() already reports any
+        # unproved-but-available incumbent (BackendStatus.FEASIBLE), never
+        # as LIMIT_REACHED, which by contract (see
+        # docs/resource-limits.md, "Termination and incumbent rules") never
+        # carries a candidate.
+        reported_backend_status = BackendStatus.FEASIBLE
 
     return UnverifiedBackendResult(
         candidate=candidate,
         diagnostics=Diagnostics(
-            termination_reason=_termination_reason(backend_status, options),
-            backend_status=backend_status,
+            termination_reason=_termination_reason(
+                reported_backend_status, options,
+            ),
+            backend_status=reported_backend_status,
             elapsed_time=elapsed_time,
             patterns_generated=len(pattern_variables),
             iterations=1,

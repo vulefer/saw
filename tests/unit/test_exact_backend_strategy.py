@@ -380,9 +380,18 @@ def test_pipeline_anchors_its_own_deadline_when_none_is_shared(
     assert result.diagnostics.backend_status is BackendStatus.OPTIMAL
 
 
-def test_deadline_exhausted_after_a_stage_skips_the_next_solver_call_entirely(
+def test_deadline_exhausted_after_a_stage_returns_the_prior_stage_incumbent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """docs/resource-limits.md: "Earlier-stage incumbents remain eligible
+    after a later stage reaches the time limit because fixing
+    already-proved objective values preserves feasibility." Stage 1 solves
+    this single-pattern problem to a proven optimum; stage 2 is never even
+    attempted because the shared deadline is already spent. The complete,
+    constraint-satisfying assignment stage 1 left behind must still be
+    returned -- honestly, as an unproven-past-that-prefix FEASIBLE
+    incumbent, never silently upgraded to LIMIT_REACHED-with-no-plan.
+    """
     problem = _one_piece_problem()
     patterns = enumerate_patterns_for_problem(problem).patterns
     clock = FakeClock(start=0.0)
@@ -402,14 +411,69 @@ def test_deadline_exhausted_after_a_stage_skips_the_next_solver_call_entirely(
     # Stage 2 must never be started: its options.time_limit_seconds would
     # already be <= 0.
     assert adapter.solve_calls == 1
-    assert result.candidate is None
-    assert result.diagnostics.backend_status is BackendStatus.LIMIT_REACHED
+    assert result.candidate is not None
+    assert result.candidate.objective_value.stock_piece_count == 1
+    assert result.candidate.objective_value.total_leftover == 4
+    assert result.candidate.objective_value.distinct_pattern_count == 1
+    # LIMIT_REACHED never carries a candidate (see
+    # docs/resource-limits.md, "Termination and incumbent rules"): a
+    # complete, available incumbent is reported as FEASIBLE instead, the
+    # same vocabulary solve() already uses for any unproved-but-verified
+    # candidate.
+    assert result.diagnostics.backend_status is BackendStatus.FEASIBLE
     assert result.diagnostics.termination_reason is TerminationReason.TIME_LIMIT
     assert result.diagnostics.completed_objective_stages == (
         ObjectiveStage.STOCK_PIECE_COUNT,
     )
     # The primary stage's proof is not thrown away just because the
-    # secondary stage never got to run.
+    # secondary stage never got to run -- but it also must not imply that
+    # the unattempted secondary or tertiary stages were themselves proved.
+    assert result.diagnostics.lower_bound == 1
+    assert result.diagnostics.upper_bound == 1
+
+
+def test_deadline_exhausted_before_the_tertiary_stage_returns_the_secondary_incumbent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same rule as the primary-to-secondary boundary above, one stage
+    later: stages 1 and 2 both reach a proven optimum, stage 3 (distinct
+    pattern count) is never attempted because the shared deadline is
+    already spent, and the resulting model state -- valid for the whole
+    problem, optimal on both proved prefixes -- must still be returned as
+    a FEASIBLE incumbent rather than discarded.
+    """
+    problem = _one_piece_problem()
+    patterns = enumerate_patterns_for_problem(problem).patterns
+    clock = FakeClock(start=0.0)
+    monkeypatch.setattr(backend_module, "perf_counter", clock)
+    monkeypatch.setattr(timing_module, "perf_counter", clock)
+    # Stages 1 and 2 together consume the entire configured 6-second
+    # budget (3 seconds each); stage 3 must never be attempted.
+    adapter = ClockAdvancingAdapter(clock, seconds_per_call=3.0)
+
+    result = solve_exact_enumerated_pipeline(
+        problem,
+        patterns,
+        adapter,  # type: ignore[arg-type]
+        BackendOptions(time_limit_seconds=6.0),
+        deadline=Deadline.from_start(started_at=clock.now, time_limit_seconds=6.0),
+    )
+
+    # Stage 3 must never be started: its options.time_limit_seconds would
+    # already be <= 0.
+    assert adapter.solve_calls == 2
+    assert result.candidate is not None
+    assert result.candidate.objective_value.stock_piece_count == 1
+    assert result.candidate.objective_value.total_leftover == 4
+    assert result.candidate.objective_value.distinct_pattern_count == 1
+    assert result.diagnostics.backend_status is BackendStatus.FEASIBLE
+    assert result.diagnostics.termination_reason is TerminationReason.TIME_LIMIT
+    assert result.diagnostics.completed_objective_stages == (
+        ObjectiveStage.STOCK_PIECE_COUNT,
+        ObjectiveStage.TOTAL_LEFTOVER,
+    )
+    # Proved only through the secondary stage -- the unattempted tertiary
+    # stage's objective must not be implied by these bounds.
     assert result.diagnostics.lower_bound == 1
     assert result.diagnostics.upper_bound == 1
 
