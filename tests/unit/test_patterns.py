@@ -1,5 +1,6 @@
 from itertools import product
 
+import saw.patterns as patterns_module
 from saw import Demand, Problem, Stock
 from saw.patterns import (
     Pattern,
@@ -208,13 +209,159 @@ def test_multiple_materials_never_produce_mixed_patterns() -> None:
         demand.demand_id: demand.material_id for demand in problem.demands
     }
 
-    patterns = enumerate_patterns_for_problem(problem)
+    result = enumerate_patterns_for_problem(problem)
 
-    assert _canonical_pattern_set(patterns) == _independently_generate_pattern_set(
+    assert result.limit_reached is False
+    assert result.patterns_generated == len(result.patterns)
+    assert _canonical_pattern_set(result.patterns) == _independently_generate_pattern_set(
         problem.stocks, problem.demands
     )
     assert all(
         demand_materials[demand_id] == stock_materials[pattern.stock_id]
-        for pattern in patterns
+        for pattern in result.patterns
         for demand_id in pattern.piece_counts
     )
+
+
+# --- pattern_limit -------------------------------------------------------
+#
+# The stock/demand pair below is shared by every pattern_limit test: it is
+# the same fixture as test_enumeration_is_finite_deterministic_and_has_no_
+# duplicates above, where the unbounded enumeration is independently proven
+# to contain exactly 9 patterns.
+
+
+def _nine_pattern_stock_and_demands() -> tuple[Stock, tuple[Demand, ...]]:
+    stock = Stock("stock-12", "steel", 12, 1)
+    demands = (
+        Demand("demand-5", "steel", 5, 2),
+        Demand("demand-2", "steel", 2, 3),
+    )
+    return stock, demands
+
+
+def test_pattern_limit_none_generates_every_pattern() -> None:
+    stock, demands = _nine_pattern_stock_and_demands()
+    problem = Problem(stocks=(stock,), demands=demands)
+
+    result = enumerate_patterns_for_problem(problem, pattern_limit=None)
+
+    assert result.limit_reached is False
+    assert result.patterns_generated == 9
+    assert len(result.patterns) == 9
+
+
+def test_pattern_limit_exactly_matching_total_is_not_a_hit() -> None:
+    stock, demands = _nine_pattern_stock_and_demands()
+    problem = Problem(stocks=(stock,), demands=demands)
+
+    result = enumerate_patterns_for_problem(problem, pattern_limit=9)
+
+    assert result.limit_reached is False
+    assert result.patterns_generated == 9
+    assert len(result.patterns) == 9
+    assert _canonical_pattern_set(result.patterns) == _canonical_pattern_set(
+        enumerate_patterns_for_single_stock(stock, demands)
+    )
+
+
+def test_pattern_limit_one_under_total_is_a_deterministic_hit() -> None:
+    stock, demands = _nine_pattern_stock_and_demands()
+    problem = Problem(stocks=(stock,), demands=demands)
+
+    result = enumerate_patterns_for_problem(problem, pattern_limit=8)
+
+    assert result.limit_reached is True
+    assert result.patterns_generated == 8
+    assert result.patterns == ()
+
+
+def test_pattern_limit_hit_is_deterministic_across_repeated_calls() -> None:
+    stock, demands = _nine_pattern_stock_and_demands()
+    problem = Problem(stocks=(stock,), demands=demands)
+
+    first = enumerate_patterns_for_problem(problem, pattern_limit=8)
+    second = enumerate_patterns_for_problem(problem, pattern_limit=8)
+
+    assert first == second
+
+
+def test_pattern_limit_never_returns_a_partial_pattern_set_as_complete() -> None:
+    stock, demands = _nine_pattern_stock_and_demands()
+    problem = Problem(stocks=(stock,), demands=demands)
+
+    for pattern_limit in range(1, 9):
+        result = enumerate_patterns_for_problem(problem, pattern_limit=pattern_limit)
+
+        assert result.limit_reached is True
+        assert result.patterns_generated == pattern_limit
+        # A hit never exposes the patterns generated before it stopped, so
+        # the caller can never mistake a partial set for a complete one.
+        assert result.patterns == ()
+
+
+def test_pattern_limit_is_shared_across_stocks_and_stops_mid_second_stock() -> None:
+    # stock-a is a different material, so it is only compatible with
+    # demand_a and alone has exactly 3 non-empty patterns (counts 1..3 of
+    # that single demand piece).
+    stock_a = Stock("stock-a", "wood", 9, 1)
+    demand_a = Demand("demand-3-wood", "wood", 3, 3)
+    stock_b, demands_b = _nine_pattern_stock_and_demands()
+
+    problem = Problem(
+        stocks=(stock_a, stock_b),
+        demands=(demand_a, *demands_b),
+    )
+
+    unbounded_a = enumerate_patterns_for_single_stock(
+        stock_a, (demand_a, *demands_b),
+    )
+    assert len(unbounded_a) == 3
+
+    unbounded_full = enumerate_patterns_for_problem(problem)
+    assert unbounded_full.patterns_generated == 12
+    assert unbounded_full.limit_reached is False
+
+    # 3 patterns from stock-a plus 4 patterns into stock-b's own 9.
+    result = enumerate_patterns_for_problem(problem, pattern_limit=7)
+
+    assert result.limit_reached is True
+    assert result.patterns_generated == 7
+    assert result.patterns == ()
+
+
+def test_pattern_limit_checks_the_budget_while_generating_not_only_after_completion(
+    monkeypatch,
+) -> None:
+    """Enumeration must stop mid-stock, not just between stocks.
+
+    This wraps the internal per-stock generator with a counting proxy and
+    asserts that fewer patterns were ever pulled from it than the stock's
+    own (independently known) total of 9 -- proving the shared budget is
+    consulted pattern-by-pattern during a single stock's own DFS walk, not
+    only once that stock's full set has already been built.
+    """
+
+    stock, demands = _nine_pattern_stock_and_demands()
+    problem = Problem(stocks=(stock,), demands=demands)
+
+    pulled: list[Pattern] = []
+    real_iter = patterns_module._iter_patterns_for_single_stock
+
+    def counting_iter(stock_arg, demands_arg):
+        for pattern in real_iter(stock_arg, demands_arg):
+            pulled.append(pattern)
+            yield pattern
+
+    monkeypatch.setattr(
+        patterns_module, "_iter_patterns_for_single_stock", counting_iter,
+    )
+
+    result = enumerate_patterns_for_problem(problem, pattern_limit=5)
+
+    assert result.limit_reached is True
+    assert result.patterns_generated == 5
+    # Only the 5 accepted patterns plus the 6th one that revealed the limit
+    # were ever pulled -- the remaining 3 of the stock's 9 patterns were
+    # never computed.
+    assert len(pulled) == 6

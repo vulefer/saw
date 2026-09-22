@@ -149,6 +149,30 @@ def _no_pattern_infeasible_result() -> UnverifiedBackendResult:
     )
 
 
+def _pattern_limit_result(patterns_generated: int) -> UnverifiedBackendResult:
+    """Return the discarded-enumeration outcome for a pattern_limit hit.
+
+    Per the pattern_limit row of docs/resource-limits.md, a limit hit claims
+    no incumbent: the partial pattern set that tripped the limit is
+    discarded in ``enumerate_patterns_for_problem`` and never reaches model
+    construction, so it can never be optimized as if it were complete.
+    """
+
+    return UnverifiedBackendResult(
+        candidate=None,
+        diagnostics=Diagnostics(
+            termination_reason=TerminationReason.PATTERN_LIMIT,
+            backend_status=BackendStatus.LIMIT_REACHED,
+            elapsed_time=0.0,
+            patterns_generated=patterns_generated,
+            iterations=0,
+            completed_objective_stages=(),
+            lower_bound=None,
+            upper_bound=None,
+        ),
+    )
+
+
 def solve_exact_enumerated_pipeline(
     problem: Problem,
     patterns: tuple[Pattern, ...],
@@ -268,7 +292,7 @@ class ExactEnumeratedBackend:
             proves_optimality=True,
             proves_infeasibility=True,
             supports_time_limit=True,
-            supports_pattern_limit=False,
+            supports_pattern_limit=True,
             objective_stages=frozenset(ObjectiveStage),
         )
 
@@ -280,14 +304,6 @@ class ExactEnumeratedBackend:
         problem: Problem,
         options: BackendOptions,
     ) -> BackendSupport:
-        if options.pattern_limit is not None:
-            return BackendSupport(
-                supported=False,
-                reason=(
-                    "The exact enumerated backend does not currently support "
-                    "a pattern limit."
-                ),
-            )
         return BackendSupport(supported=True)
 
     def solve(
@@ -296,34 +312,41 @@ class ExactEnumeratedBackend:
         options: BackendOptions,
     ) -> UnverifiedBackendResult:
         started_at = perf_counter()
-        patterns = enumerate_patterns_for_problem(problem)
 
         if not problem.demands:
             result = _empty_demand_result()
-        elif not patterns:
-            result = _no_pattern_infeasible_result()
         else:
-            try:
-                result = solve_exact_enumerated_pipeline(
-                    problem,
-                    patterns,
-                    self._adapter,
-                    options,
-                )
-            except PulpAdapterError:
-                return UnverifiedBackendResult(
-                    candidate=None,
-                    diagnostics=Diagnostics(
-                        termination_reason=TerminationReason.BACKEND_FAILURE,
-                        backend_status=BackendStatus.FAILED,
-                        elapsed_time=perf_counter() - started_at,
-                        patterns_generated=len(patterns),
-                        iterations=1,
-                        completed_objective_stages=(),
-                        lower_bound=None,
-                        upper_bound=None,
-                    ),
-                )
+            enumeration = enumerate_patterns_for_problem(
+                problem,
+                options.pattern_limit,
+            )
+
+            if enumeration.limit_reached:
+                result = _pattern_limit_result(enumeration.patterns_generated)
+            elif not enumeration.patterns:
+                result = _no_pattern_infeasible_result()
+            else:
+                try:
+                    result = solve_exact_enumerated_pipeline(
+                        problem,
+                        enumeration.patterns,
+                        self._adapter,
+                        options,
+                    )
+                except PulpAdapterError:
+                    return UnverifiedBackendResult(
+                        candidate=None,
+                        diagnostics=Diagnostics(
+                            termination_reason=TerminationReason.BACKEND_FAILURE,
+                            backend_status=BackendStatus.FAILED,
+                            elapsed_time=perf_counter() - started_at,
+                            patterns_generated=len(enumeration.patterns),
+                            iterations=1,
+                            completed_objective_stages=(),
+                            lower_bound=None,
+                            upper_bound=None,
+                        ),
+                    )
 
         return replace(
             result,

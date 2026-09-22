@@ -65,6 +65,18 @@ def _one_piece_problem() -> Problem:
     )
 
 
+def _multi_pattern_problem() -> Problem:
+    # Enumerates to exactly 3 non-empty patterns: {demand-4: 1},
+    # {demand-6: 1}, and {demand-4: 1, demand-6: 1}.
+    return Problem(
+        stocks=(Stock("stock-10", "steel", 10, 1),),
+        demands=(
+            Demand("piece-6", "steel", 6, 1),
+            Demand("piece-4", "steel", 4, 1),
+        ),
+    )
+
+
 def test_exact_backend_is_an_optimization_strategy() -> None:
     backend = ExactEnumeratedBackend(FakeAdapter())  # type: ignore[arg-type]
 
@@ -74,22 +86,22 @@ def test_exact_backend_is_an_optimization_strategy() -> None:
     assert backend.capabilities().objective_stages == frozenset(ObjectiveStage)
 
 
-def test_exact_backend_reports_unsupported_pattern_limit() -> None:
+def test_exact_backend_reports_supported_pattern_limit() -> None:
     backend = ExactEnumeratedBackend(FakeAdapter())  # type: ignore[arg-type]
+
+    assert backend.capabilities().supports_pattern_limit is True
 
     support = backend.check_support(
         _one_piece_problem(),
         BackendOptions(pattern_limit=10),
     )
 
-    assert support.supported is False
-    assert support.reason is not None
-    assert "pattern limit" in support.reason
+    assert support.supported is True
 
 
 def test_primary_infeasibility_is_returned_as_a_structured_result() -> None:
     problem = _one_piece_problem()
-    patterns = enumerate_patterns_for_problem(problem)
+    patterns = enumerate_patterns_for_problem(problem).patterns
 
     result = solve_exact_enumerated_pipeline(
         problem,
@@ -154,7 +166,7 @@ def test_no_feasible_patterns_proves_infeasibility_without_solver() -> None:
 
 def test_feasible_limit_incumbent_is_returned_without_optimality_claim() -> None:
     problem = _one_piece_problem()
-    patterns = enumerate_patterns_for_problem(problem)
+    patterns = enumerate_patterns_for_problem(problem).patterns
 
     result = solve_exact_enumerated_pipeline(
         problem,
@@ -185,3 +197,61 @@ def test_adapter_failure_becomes_a_structured_backend_error() -> None:
         TerminationReason.BACKEND_FAILURE
     )
     assert adapter.solve_calls == 1
+
+
+# --- pattern_limit ---------------------------------------------------------
+
+
+def test_pattern_limit_exactly_matching_total_reaches_the_solver() -> None:
+    adapter = FakeAdapter(BackendStatus.INFEASIBLE)
+    backend = ExactEnumeratedBackend(adapter)  # type: ignore[arg-type]
+
+    result = backend.solve(
+        _multi_pattern_problem(), BackendOptions(pattern_limit=3),
+    )
+
+    assert adapter.solve_calls == 1
+    assert result.diagnostics.termination_reason is TerminationReason.COMPLETED
+    assert result.diagnostics.backend_status is BackendStatus.INFEASIBLE
+    assert result.diagnostics.patterns_generated == 3
+
+
+def test_pattern_limit_hit_returns_limit_with_accurate_count_and_skips_the_solver() -> None:
+    adapter = FakeAdapter()
+    backend = ExactEnumeratedBackend(adapter)  # type: ignore[arg-type]
+
+    # The problem enumerates to 3 patterns; a limit of 2 is hit on the 3rd.
+    result = backend.solve(
+        _multi_pattern_problem(), BackendOptions(pattern_limit=2),
+    )
+
+    assert result.candidate is None
+    assert result.diagnostics.termination_reason is TerminationReason.PATTERN_LIMIT
+    assert result.diagnostics.backend_status is BackendStatus.LIMIT_REACHED
+    assert result.diagnostics.patterns_generated == 2
+    assert result.diagnostics.iterations == 0
+    assert result.diagnostics.completed_objective_stages == ()
+    assert result.diagnostics.lower_bound is None
+    assert result.diagnostics.upper_bound is None
+    assert adapter.solve_calls == 0
+
+
+def test_pattern_limit_hit_is_deterministic_across_repeated_backend_calls() -> None:
+    problem = _multi_pattern_problem()
+
+    first = ExactEnumeratedBackend(FakeAdapter()).solve(  # type: ignore[arg-type]
+        problem, BackendOptions(pattern_limit=2),
+    )
+    second = ExactEnumeratedBackend(FakeAdapter()).solve(  # type: ignore[arg-type]
+        problem, BackendOptions(pattern_limit=2),
+    )
+
+    assert first.diagnostics.backend_status == second.diagnostics.backend_status
+    assert (
+        first.diagnostics.termination_reason
+        == second.diagnostics.termination_reason
+    )
+    assert (
+        first.diagnostics.patterns_generated
+        == second.diagnostics.patterns_generated
+    )
