@@ -719,6 +719,41 @@ def test_bounds_round_trip_including_null(
     assert payload["diagnostics"]["upper_bound"] == upper_bound
 
 
+_JSON_DIAGNOSTICS_MEMBERS = frozenset(
+    {
+        "termination_reason",
+        "backend_status",
+        "elapsed_time",
+        "patterns_generated",
+        "iterations",
+        "completed_objective_stages",
+        "lower_bound",
+        "upper_bound",
+    }
+)
+
+
+def test_backend_id_and_backend_version_are_never_serialized() -> None:
+    """docs/formats.md, "Python-only diagnostics fields": backend_id and
+    backend_version exist only on the Python Diagnostics object. The
+    version 1 JSON solution format is a closed contract, so
+    json_from_solution() must never write them, however they are set on
+    the Python side.
+    """
+    solution = _optimal_solution(
+        diagnostics=_diagnostics(
+            backend_id="exact_enumerated",
+            backend_version="2.9.0",
+        )
+    )
+
+    payload = json.loads(json_from_solution(solution))
+
+    assert payload["diagnostics"].keys() == _JSON_DIAGNOSTICS_MEMBERS
+    assert "backend_id" not in payload["diagnostics"]
+    assert "backend_version" not in payload["diagnostics"]
+
+
 def test_verification_report_round_trips_as_valid_with_empty_findings() -> None:
     solution = _optimal_solution()
 

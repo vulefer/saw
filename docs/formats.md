@@ -283,18 +283,21 @@ recomputed and matched these values. It does not prove optimality; only
 
 ### Diagnostics
 
-`diagnostics` always contains exactly these members:
+`diagnostics` always contains exactly these members. Every member has one
+documented meaning that holds across every `solution_status`; the per-status
+table further down states only which *values* are reachable for a given
+status, never a second meaning for the same member.
 
 | Member | Type and meaning |
 | --- | --- |
-| `termination_reason` | A lowercase `TerminationReason` value describing why execution stopped. |
-| `backend_status` | A lowercase normalized `BackendStatus` value observed before public-status translation. |
-| `elapsed_time` | A finite, non-negative JSON number of elapsed seconds. |
-| `patterns_generated` | A non-negative integer. |
-| `iterations` | A non-negative integer. |
-| `completed_objective_stages` | The ordered prefix of objective stages proved complete. |
-| `lower_bound` | A non-negative integer primary-objective bound, or JSON `null` when no bound is reported. |
-| `upper_bound` | A non-negative integer primary-objective bound, or JSON `null` when no bound is reported. |
+| `termination_reason` | A lowercase `TerminationReason` value naming why execution stopped: `completed` for a conclusive mathematical result (optimal, infeasible, or a fully proved stage prefix), a specific limit name (`time_limit`, `pattern_limit`, `size_limit`, ...) when a declared resource budget stopped an otherwise-unfinished attempt, `unsupported_problem` when the backend never started, or a failure reason (`backend_unavailable`, `backend_failure`, `unknown_backend_status`, `internal_error`) when execution could not produce a trustworthy result. |
+| `backend_status` | The lowercase normalized `BackendStatus` value the backend itself reported, before translation into the public `solution_status`. It is a strictly internal, backend-facing status: two different `termination_reason` values can share one `backend_status` (for example `limit_reached` paired with either `time_limit` or `pattern_limit`), so callers needing to know *why* must read `termination_reason`, not `backend_status`. |
+| `elapsed_time` | A finite, non-negative JSON number of seconds measured once, from entry to `solve()` -- before problem validation -- to the point this diagnostics object was produced (see docs/resource-limits.md, "Evaluation order"). It covers validation, every preflight guard, pattern enumeration, model construction, every objective-stage solver call actually attempted, and, when a candidate is returned, independent verification. It is never a per-stage or per-call figure. |
+| `patterns_generated` | A non-negative integer count of complete, non-empty patterns actually produced by enumeration before enumeration stopped, was discarded, or fed model construction. It is `0` whenever enumeration never ran at all (an empty-demand problem, `unsupported`, or a preflight `size_limit`/`time_limit` outcome reached before the backend). A `pattern_limit` outcome reports exactly the configured limit that was reached; every other outcome reports however many patterns enumeration actually produced, which is never rounded up to a configured ceiling it did not reach. |
+| `iterations` | A non-negative integer count of backend solver invocations (one `adapter.solve()` call per lexicographic objective stage) *attempted* during this call -- distinct from `completed_objective_stages`, which counts only stages *proved*. Each of the three stages contributes at most `1`, counted the instant its own solver call is made, regardless of whether that call completes with a proven optimum, returns an unproved incumbent, or fails; a stage whose turn never came because the shared deadline was already spent before its call contributes `0`. It is `0` whenever no solver call was ever made (an empty-demand problem, a problem with no feasible non-empty pattern, `unsupported`, or any limit reached before the first solver call). A fully completed `optimal` result reports `3`. |
+| `completed_objective_stages` | The ordered prefix of `stock_piece_count`, `total_leftover`, `distinct_pattern_count` *proved* to a global optimum -- for the model as constrained by every earlier stage -- before execution stopped. A stage whose solver call was attempted (and so already counted in `iterations`) but did not return a proven optimum is never included here, even when a plan is still returned as `feasible`. |
+| `lower_bound` | A non-negative integer proved lower bound on `stock_piece_count`, or JSON `null` when no bound is reported. Numeric only when some completed or in-progress work actually proves it; never an estimate or a value carried over from an unrelated stage. |
+| `upper_bound` | A non-negative integer upper bound on `stock_piece_count` taken from an actual feasible solution (proved or not), or JSON `null` when no such solution is available to report. Never a guess and never smaller than what a genuinely feasible assignment achieves. |
 
 The only valid stage order is `stock_piece_count`, `total_leftover`, then
 `distinct_pattern_count`. An `optimal` result contains all three. Other statuses
@@ -304,9 +307,11 @@ stages do not upgrade the public status.
 Numeric bounds concern only `stock_piece_count`. A numeric lower bound must be a
 proved lower bound and a numeric upper bound must come from a feasible solution;
 producers must use `null` rather than a guess. When both are numeric, the lower
-bound must not exceed the upper bound. A bound, equal bounds, a backend status,
-or a termination reason never overrides `solution_status` and never proves the
-later objective stages.
+bound must not exceed the upper bound -- and, because both draw from the same
+fixed `stock_piece_count` value whenever a stage beyond the primary one is
+involved, they are frequently equal rather than merely non-crossing. A bound,
+equal bounds, a backend status, or a termination reason never overrides
+`solution_status` and never proves the later objective stages.
 
 The schema restricts status/diagnostic combinations. In particular,
 `infeasible` requires a normalized `infeasible` backend outcome, `limit`
@@ -314,6 +319,58 @@ requires `limit_reached`, and `unsupported` requires `not_run` with
 `unsupported_problem`. Error diagnostics use only failure outcomes and reasons.
 Because `error` makes no mathematical claim, it also reports no completed
 objective stages and uses `null` for both bounds.
+
+#### Diagnostics by `solution_status`
+
+This table exists only to make the schema's status/diagnostic restrictions
+above concrete per outcome; it introduces no member and no meaning that is
+not already defined by the field table. `#stages` is the length of
+`completed_objective_stages`. "Attempted" for `iterations` and
+"as-enumerated" for `patterns_generated` always mean the values defined in
+the field table above -- the actual count of solver calls made, and of
+patterns enumeration actually produced -- never a value fixed in advance by
+`solution_status` alone. Two producers may therefore report different
+`iterations` or `patterns_generated` for the same `solution_status` on
+different inputs; only the *combinations* below are restricted by the
+schema. Backend-specific figures (for example, that `exact_enumerated`
+always reports `iterations: 3` for `optimal`) are documented in
+`docs/resource-limits.md`, not repeated here.
+
+| `solution_status` | `termination_reason` | `patterns_generated` | `iterations` | `#stages` | bounds |
+| --- | --- | --- | --- | --- | --- |
+| `optimal` | `completed` | as-enumerated | attempted | `3` | `lower_bound == upper_bound`, both the proved stock count |
+| `feasible` | a limit reason, or `completed` for an unproved prior-stage incumbent | as-enumerated | attempted, at least `1` (a solver call must have run to produce the incumbent) | `0`-`2` | numeric, both equal to the stock count proved by the last completed stage, when `#stages > 0`; otherwise both `null` |
+| `infeasible` | `completed` | as-enumerated | attempted | `0` | both `null` |
+| `limit` (with incumbent) | the limit reason that stopped work | as-enumerated | attempted, at least `1` | `0`-`2` | numeric, both equal to the stock count proved by the last completed stage, when `#stages > 0`; otherwise both `null` |
+| `limit` (no incumbent) | the limit reason that stopped work | as-enumerated, or the configured ceiling when `pattern_limit` was reached | attempted | `0` | both `null` |
+| `unsupported` | `unsupported_problem` | `0` (no backend ever enumerates for a problem it declines) | `0` | `0` | both `null` |
+| `error` | a failure reason | as-enumerated, or `0` when the failure happened before enumeration | attempted, including the failing call when the failure happened inside one | `0` | both `null` |
+
+### Python-only diagnostics fields
+
+The Python `Diagnostics` dataclass (`saw.Diagnostics`) carries two members
+beyond the JSON table above:
+
+| Member | Type and meaning |
+| --- | --- |
+| `backend_id` | The identifier of the backend implementation that was reached for this call (for example `"exact_enumerated"`), or `None` when no backend was ever consulted. |
+| `backend_version` | The version of that backend's solver dependency (for example the installed PuLP version), or `None` when no backend was consulted, or when the backend could not determine one. |
+
+Both are populated as soon as `solve()` has called the selected backend's
+`check_availability()` -- which happens before `unsupported` is decided, so
+`unsupported` diagnostics carry them too -- and stay `None` for every outcome
+decided before that point: `unsupported`'s preflight-limit siblings
+(`size_limit`, and a `time_limit` reached before the backend is ever reached)
+never consult a backend at all.
+
+These two fields exist only on the Python object. The version 1 JSON solution
+format is a closed contract (see "Unknown fields and format evolution" above
+and `schemas/solution-v1.schema.json`'s `additionalProperties: false`):
+`json_from_solution()` never writes them, and a future JSON member for backend
+or dependency identification would require a new `format_version`, not a
+silent addition to version 1. A caller that needs this information from the
+JSON CLI output has no wire-format source for it in v1; it is available only
+to a direct Python caller of `solve()`.
 
 ### Verification report and findings
 

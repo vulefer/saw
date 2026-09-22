@@ -87,17 +87,24 @@ Resource limits are expected solve outcomes. They do not raise
 `ValidationError`, do not become `unsupported`, and never imply infeasibility
 or optimality. Diagnostics use the following reasons:
 
-| Limit that stopped work | `termination_reason` | `patterns_generated` | v0.2.0 exact-backend incumbent policy |
-| --- | --- | --- | --- |
-| End-to-end time | `time_limit` | Number fully generated when work stopped | Return the best available integer incumbent only after full independent verification |
-| Problem record count | `size_limit` | `0` | No incumbent; optimization was not started |
-| Numeric magnitude | `size_limit` | `0` | No incumbent; optimization was not started |
-| Pattern count | `pattern_limit` | Exactly the configured limit | No incumbent; the partial enumeration is discarded and never optimized |
+| Limit that stopped work | `termination_reason` | `patterns_generated` | `iterations` | v0.2.0 exact-backend incumbent policy |
+| --- | --- | --- | --- | --- |
+| End-to-end time | `time_limit` | Number fully generated when work stopped | `0`-`3`: the number of the three lexicographic-stage solver calls actually made before the deadline stopped further work | Return the best available integer incumbent only after full independent verification |
+| Problem record count | `size_limit` | `0` | `0`: this guard is checked before backend selection, so no solver call is ever made | No incumbent; optimization was not started |
+| Numeric magnitude | `size_limit` | `0` | `0`: this guard is checked before backend selection, so no solver call is ever made | No incumbent; optimization was not started |
+| Pattern count | `pattern_limit` | Exactly the configured limit | `0`: the limit is enforced during enumeration, entirely before any solver call | No incumbent; the partial enumeration is discarded and never optimized |
 
 Problem size and numeric magnitude deliberately share `size_limit`: both are
 pre-solve size guards, while the detailed configured option identifies which
 test was applied. The version 1 solution format does not expose untrusted or
 partially enumerated data.
+
+`iterations` counts backend solver invocations (one per lexicographic
+objective stage actually started), not stages proved complete -- see
+`docs/formats.md`, "Diagnostics", for the full field definition. For the
+`time_limit` row, the exact value on any given run depends only on how much
+of the shared deadline had already been spent when each stage's turn came,
+never on which incumbent policy applied.
 
 If a time limit stops the exact backend without an integer incumbent, Saw
 returns `solution_status: "limit"`, `backend_status: "limit_reached"`, and no

@@ -249,7 +249,94 @@ def test_adapter_failure_becomes_a_structured_backend_error() -> None:
     assert result.diagnostics.termination_reason is (
         TerminationReason.BACKEND_FAILURE
     )
+    # A primary-stage failure means exactly one solver call was attempted;
+    # see docs/formats.md, "Diagnostics", for what `iterations` counts.
+    assert result.diagnostics.iterations == 1
+    assert result.diagnostics.completed_objective_stages == ()
+    assert result.diagnostics.lower_bound is None
+    assert result.diagnostics.upper_bound is None
     assert adapter.solve_calls == 1
+
+
+class StageFailureAdapter(FakeAdapter):
+    """Succeeds (OPTIMAL, every model variable set to 1) on every call up to
+    but not including ``fail_at_call``, then raises ``PulpAdapterError`` on
+    that call -- so a test can put the failure at a chosen lexicographic
+    stage after some number of earlier stages already proved optimal.
+    """
+
+    def __init__(self, fail_at_call: int) -> None:
+        super().__init__(BackendStatus.OPTIMAL)
+        self._fail_at_call = fail_at_call
+
+    def solve(
+        self,
+        model: pulp.LpProblem,
+        options: BackendOptions,
+    ) -> BackendStatus:
+        self.solve_calls += 1
+        if self.solve_calls == self._fail_at_call:
+            raise PulpAdapterError("solver failed")
+        for variable in model.variables():
+            variable.varValue = 1
+        return self.status
+
+
+def test_secondary_stage_adapter_failure_reports_two_attempted_iterations() -> None:
+    """A failure on the *second* solver call must report `iterations == 2`,
+    not the `1` a naive hardcoded value would give every backend failure
+    regardless of which stage actually failed.
+    """
+    problem = _one_piece_problem()
+    patterns = enumerate_patterns_for_problem(problem).patterns
+    adapter = StageFailureAdapter(fail_at_call=2)
+
+    result = solve_exact_enumerated_pipeline(
+        problem,
+        patterns,
+        adapter,  # type: ignore[arg-type]
+        BackendOptions(),
+        elapsed_time=0.0,
+    )
+
+    assert result.candidate is None
+    assert result.diagnostics.backend_status is BackendStatus.FAILED
+    assert result.diagnostics.termination_reason is (
+        TerminationReason.BACKEND_FAILURE
+    )
+    assert result.diagnostics.iterations == 2
+    # An unexpected backend failure makes no mathematical claim, so the
+    # primary stage's already-proved optimum is not reported as completed
+    # here, and both bounds stay null (see docs/formats.md's error rules).
+    assert result.diagnostics.completed_objective_stages == ()
+    assert result.diagnostics.lower_bound is None
+    assert result.diagnostics.upper_bound is None
+    assert adapter.solve_calls == 2
+
+
+def test_tertiary_stage_adapter_failure_reports_three_attempted_iterations() -> None:
+    problem = _one_piece_problem()
+    patterns = enumerate_patterns_for_problem(problem).patterns
+    adapter = StageFailureAdapter(fail_at_call=3)
+
+    result = solve_exact_enumerated_pipeline(
+        problem,
+        patterns,
+        adapter,  # type: ignore[arg-type]
+        BackendOptions(),
+        elapsed_time=0.0,
+    )
+
+    assert result.candidate is None
+    assert result.diagnostics.backend_status is BackendStatus.FAILED
+    assert result.diagnostics.termination_reason is (
+        TerminationReason.BACKEND_FAILURE
+    )
+    assert result.diagnostics.iterations == 3
+    assert result.diagnostics.completed_objective_stages == ()
+    assert result.diagnostics.lower_bound is None
+    assert result.diagnostics.upper_bound is None
+    assert adapter.solve_calls == 3
 
 
 # --- pattern_limit ---------------------------------------------------------
@@ -430,6 +517,8 @@ def test_deadline_exhausted_after_a_stage_returns_the_prior_stage_incumbent(
     # the unattempted secondary or tertiary stages were themselves proved.
     assert result.diagnostics.lower_bound == 1
     assert result.diagnostics.upper_bound == 1
+    # Exactly one solver call (the primary stage's) was ever attempted.
+    assert result.diagnostics.iterations == 1
 
 
 def test_deadline_exhausted_before_the_tertiary_stage_returns_the_secondary_incumbent(
@@ -476,6 +565,9 @@ def test_deadline_exhausted_before_the_tertiary_stage_returns_the_secondary_incu
     # stage's objective must not be implied by these bounds.
     assert result.diagnostics.lower_bound == 1
     assert result.diagnostics.upper_bound == 1
+    # Two solver calls (primary, then secondary) were attempted; the
+    # tertiary stage's was not.
+    assert result.diagnostics.iterations == 2
 
 
 def test_deadline_already_expired_before_the_pipeline_starts_skips_every_stage() -> None:
@@ -501,6 +593,9 @@ def test_deadline_already_expired_before_the_pipeline_starts_skips_every_stage()
     assert result.diagnostics.completed_objective_stages == ()
     assert result.diagnostics.lower_bound is None
     assert result.diagnostics.upper_bound is None
+    # No solver call was ever attempted: the shared deadline was already
+    # spent before the pipeline could start its first stage.
+    assert result.diagnostics.iterations == 0
 
 
 def test_enumeration_time_limit_is_reported_distinctly_from_pattern_limit(

@@ -117,12 +117,21 @@ def _demands(count: int) -> tuple[Demand, ...]:
 def _assert_size_limit_result(result) -> None:
     assert result.solution_status is SolutionStatus.LIMIT
     assert result.diagnostics.termination_reason is TerminationReason.SIZE_LIMIT
-    assert result.diagnostics.backend_status is BackendStatus.NOT_RUN
+    # backend_status is LIMIT_REACHED -- not NOT_RUN -- even for this
+    # preflight-only outcome: the version 1 JSON schema's limitDiagnostics
+    # requires backend_status: "limit_reached" for every `limit`
+    # solution_status (see schemas/solution-v1.schema.json and
+    # docs/formats.md, "Diagnostics"). NOT_RUN is reserved for
+    # `unsupported`.
+    assert result.diagnostics.backend_status is BackendStatus.LIMIT_REACHED
     assert result.diagnostics.patterns_generated == 0
     assert result.diagnostics.iterations == 0
     assert result.diagnostics.completed_objective_stages == ()
     assert result.diagnostics.lower_bound is None
     assert result.diagnostics.upper_bound is None
+    # Never reached a backend, so neither Python-only field is populated.
+    assert result.diagnostics.backend_id is None
+    assert result.diagnostics.backend_version is None
     assert result.cut_patterns == ()
     assert result.objective_value is None
     assert result.verification_report is None

@@ -138,6 +138,9 @@ def _to_backend_options(
 
 def _to_public_solution(
     result: UnverifiedBackendResult,
+    *,
+    backend_id: str,
+    backend_version: str | None,
 ) -> Solution:
     candidate = result.candidate
 
@@ -149,11 +152,25 @@ def _to_public_solution(
         objective_value=(
             candidate.objective_value if candidate is not None else None
         ),
-        diagnostics=result.diagnostics,
+        # Stamped on here rather than by the backend itself: solve() is the
+        # single place that already calls check_availability() (see
+        # docs/formats.md, "Diagnostics"), so every outcome that reached the
+        # backend reports the same backend_id/backend_version consistently,
+        # regardless of which internal helper inside the backend built this
+        # particular Diagnostics value.
+        diagnostics=replace(
+            result.diagnostics,
+            backend_id=backend_id,
+            backend_version=backend_version,
+        ),
     )
 
 
-def _unsupported_solution() -> Solution:
+def _unsupported_solution(
+    *,
+    backend_id: str,
+    backend_version: str | None,
+) -> Solution:
     return Solution(
         solution_status=SolutionStatus.UNSUPPORTED,
         cut_patterns=(),
@@ -167,6 +184,13 @@ def _unsupported_solution() -> Solution:
             completed_objective_stages=(),
             lower_bound=None,
             upper_bound=None,
+            # check_availability() already ran (see solve()) before
+            # check_support() declined the problem, so -- unlike the
+            # preflight size/time-limit outcomes below, which never reach a
+            # backend at all -- the backend that would have run this
+            # problem, and its dependency version, are already known.
+            backend_id=backend_id,
+            backend_version=backend_version,
         ),
     )
 
@@ -190,19 +214,23 @@ def _exceeds_numeric_magnitude_limit(problem: Problem, limit: int | None) -> boo
 
 
 def _size_limit_solution(started_at: float) -> Solution:
-    # Mirrors _unsupported_solution(): a Saw-level preflight outcome that
-    # never touches a backend, so backend_status stays NOT_RUN and no
-    # candidate or objective stage is claimed. Per docs/resource-limits.md,
-    # problem_size_limit and numeric_magnitude_limit share the SIZE_LIMIT
-    # termination reason; both are pre-solve size guards and neither implies
-    # infeasibility.
+    # A Saw-level preflight outcome that never touches a backend, so no
+    # candidate or objective stage is claimed. backend_status is
+    # LIMIT_REACHED -- not NOT_RUN -- because the version 1 JSON schema's
+    # limitDiagnostics requires backend_status: "limit_reached" for every
+    # `limit` solution_status, preflight or not (see
+    # schemas/solution-v1.schema.json and docs/formats.md, "Diagnostics");
+    # NOT_RUN is reserved for `unsupported`, whose schema instead requires
+    # it. Per docs/resource-limits.md, problem_size_limit and
+    # numeric_magnitude_limit share the SIZE_LIMIT termination reason; both
+    # are pre-solve size guards and neither implies infeasibility.
     return Solution(
         solution_status=SolutionStatus.LIMIT,
         cut_patterns=(),
         objective_value=None,
         diagnostics=Diagnostics(
             termination_reason=TerminationReason.SIZE_LIMIT,
-            backend_status=BackendStatus.NOT_RUN,
+            backend_status=BackendStatus.LIMIT_REACHED,
             elapsed_time=perf_counter() - started_at,
             patterns_generated=0,
             iterations=0,
@@ -239,11 +267,13 @@ def _time_limit_solution(started_at: float) -> Solution:
     before the backend could be reached.
 
     Mirrors _size_limit_solution: a Saw-level preflight outcome that never
-    touches a backend, so backend_status stays NOT_RUN and no candidate or
-    objective stage is claimed. Per docs/resource-limits.md, "remaining
-    end-to-end time" is checked immediately after the problem_size_limit and
-    numeric_magnitude_limit preflight guards and before pattern_limit (which
-    is only ever consulted while enumerating, inside the backend).
+    touches a backend, so no candidate or objective stage is claimed, and
+    backend_status is LIMIT_REACHED for the same schema reason documented
+    there (NOT_RUN is reserved for `unsupported`). Per
+    docs/resource-limits.md, "remaining end-to-end time" is checked
+    immediately after the problem_size_limit and numeric_magnitude_limit
+    preflight guards and before pattern_limit (which is only ever consulted
+    while enumerating, inside the backend).
     """
     return Solution(
         solution_status=SolutionStatus.LIMIT,
@@ -251,7 +281,7 @@ def _time_limit_solution(started_at: float) -> Solution:
         objective_value=None,
         diagnostics=Diagnostics(
             termination_reason=TerminationReason.TIME_LIMIT,
-            backend_status=BackendStatus.NOT_RUN,
+            backend_status=BackendStatus.LIMIT_REACHED,
             elapsed_time=perf_counter() - started_at,
             patterns_generated=0,
             iterations=0,
@@ -308,10 +338,17 @@ def solve(
 
     support = backend.check_support(problem, backend_options)
     if not support.supported:
-        return _unsupported_solution()
+        return _unsupported_solution(
+            backend_id=backend.backend_id,
+            backend_version=availability.backend_version,
+        )
 
     result = backend.solve(problem, backend_options)
-    unverified_solution = _to_public_solution(result)
+    unverified_solution = _to_public_solution(
+        result,
+        backend_id=backend.backend_id,
+        backend_version=availability.backend_version,
+    )
 
     backend_status = result.diagnostics.backend_status
     statuses_requiring_candidate = {

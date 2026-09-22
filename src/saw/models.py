@@ -108,6 +108,21 @@ class Diagnostics:
     completed_objective_stages: tuple[ObjectiveStage, ...]
     lower_bound: int | None
     upper_bound: int | None
+    # backend_id/backend_version identify which backend implementation (and
+    # which version of its solver dependency) was actually reached for this
+    # call. Both are None whenever no backend was consulted at all -- a
+    # preflight resource-limit outcome (problem_size_limit,
+    # numeric_magnitude_limit, or an already-expired deadline checked before
+    # backend.solve() is ever called) never sets them. They are populated
+    # from BackendAvailability as soon as solve() has called
+    # backend.check_availability(), which covers every other outcome,
+    # including `unsupported`. Unlike every other Diagnostics member, this
+    # pair is intentionally Python-API-only: the version 1 JSON solution
+    # format is a closed contract (see docs/formats.md) and does not carry
+    # them, so json_from_solution() never serializes these two fields. See
+    # docs/formats.md, "Diagnostics", for the full rule.
+    backend_id: str | None = None
+    backend_version: str | None = None
 
 @dataclass(frozen=True, slots=True)
 class Solution:

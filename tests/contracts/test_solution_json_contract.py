@@ -9,14 +9,19 @@ from jsonschema.exceptions import ValidationError
 from saw import (
     BackendStatus,
     CutPattern,
+    Demand,
     Diagnostics,
     ObjectiveStage,
     ObjectiveValue,
+    Problem,
     Solution,
     SolutionStatus,
+    SolveOptions,
+    Stock,
     TerminationReason,
     VerificationReport,
     json_from_solution,
+    solve,
 )
 from saw.patterns import Pattern
 
@@ -579,3 +584,113 @@ def test_json_from_solution_matches_the_documented_optimal_example() -> None:
     )
 
     assert json.loads(json_from_solution(solution)) == example
+
+
+# --- solve()'s actual output, not just hand-built fixtures ------------------
+#
+# The tests above construct Solution/Diagnostics objects by hand, so they
+# only prove the schema *can* express every status -- not that solve()
+# itself always produces a schema-valid Diagnostics combination for a given
+# status. A Saw-level preflight outcome (a resource limit reached before any
+# backend is ever consulted) is exactly the kind of path a hand-built
+# fixture would not organically catch getting wrong. These tests close that
+# gap by running solve() for real and validating what it actually returns.
+
+
+def _validate_solve_output(
+    validator: Draft202012Validator,
+    problem: Problem,
+    options: SolveOptions | None = None,
+) -> dict[str, object]:
+    result = solve(problem, options)
+    payload = json.loads(json_from_solution(result))
+    validator.validate(payload)
+    return payload
+
+
+def test_real_optimal_solve_output_validates(
+    validator: Draft202012Validator,
+) -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 1),),
+        demands=(
+            Demand("piece-6", "steel", 6, 1),
+            Demand("piece-4", "steel", 4, 1),
+        ),
+    )
+
+    payload = _validate_solve_output(validator, problem)
+
+    assert payload["solution_status"] == "optimal"
+
+
+def test_real_infeasible_solve_output_validates(
+    validator: Draft202012Validator,
+) -> None:
+    problem = Problem(
+        stocks=(Stock("stock-3", "steel", 3, 1),),
+        demands=(Demand("piece-4", "steel", 4, 1),),
+    )
+
+    payload = _validate_solve_output(validator, problem)
+
+    assert payload["solution_status"] == "infeasible"
+
+
+def test_real_preflight_size_limit_solve_output_validates(
+    validator: Draft202012Validator,
+) -> None:
+    # Regression test: solve()'s preflight size_limit outcome once reported
+    # backend_status "not_run", which schemas/solution-v1.schema.json's
+    # limitDiagnostics rejects for solution_status "limit" (it requires
+    # "limit_reached"). See docs/formats.md, "Diagnostics", for the fixed
+    # rule.
+    problem = Problem(
+        stocks=tuple(
+            Stock(f"stock-{index}", "steel", 10, 1) for index in range(201)
+        ),
+        demands=(),
+    )
+
+    payload = _validate_solve_output(validator, problem)
+
+    assert payload["solution_status"] == "limit"
+    assert payload["diagnostics"]["backend_status"] == "limit_reached"
+    assert payload["diagnostics"]["termination_reason"] == "size_limit"
+
+
+def test_real_preflight_time_limit_solve_output_validates(
+    validator: Draft202012Validator,
+) -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 1),),
+        demands=(Demand("piece-6", "steel", 6, 1),),
+    )
+
+    payload = _validate_solve_output(
+        validator, problem, SolveOptions(time_limit_seconds=1e-12)
+    )
+
+    assert payload["solution_status"] == "limit"
+    assert payload["diagnostics"]["backend_status"] == "limit_reached"
+    assert payload["diagnostics"]["termination_reason"] == "time_limit"
+
+
+def test_real_pattern_limit_solve_output_validates(
+    validator: Draft202012Validator,
+) -> None:
+    problem = Problem(
+        stocks=(Stock("stock-10", "steel", 10, 1),),
+        demands=(
+            Demand("piece-6", "steel", 6, 1),
+            Demand("piece-4", "steel", 4, 1),
+        ),
+    )
+
+    payload = _validate_solve_output(
+        validator, problem, SolveOptions(pattern_limit=2)
+    )
+
+    assert payload["solution_status"] == "limit"
+    assert payload["diagnostics"]["backend_status"] == "limit_reached"
+    assert payload["diagnostics"]["termination_reason"] == "pattern_limit"

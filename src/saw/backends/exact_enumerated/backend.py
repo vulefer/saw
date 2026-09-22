@@ -73,8 +73,18 @@ def _stopped_backend_result(
     *,
     elapsed_time: float,
     completed_objective_stages: tuple[ObjectiveStage, ...],
+    iterations: int,
     proven_stock_count: int | None = None,
 ) -> UnverifiedBackendResult:
+    # ``iterations`` is the number of backend solver invocations
+    # (adapter.solve() calls) actually attempted for this solve() call --
+    # not merely the number of stages proved complete. A stage stopped
+    # before its own solve() was ever called (the shared deadline was
+    # already spent) contributes 0 to this count; a stage whose solve()
+    # was called and returned a non-terminal status still contributes 1,
+    # even though it did not itself complete. Every caller below passes
+    # the exact count for its own stop point so this field stays truthful
+    # (see docs/formats.md, "Diagnostics").
     # Two situations guarantee pattern_variables already holds a complete,
     # constraint-satisfying assignment for the *whole* model (every demand
     # exactly met, every stock bound respected -- see
@@ -134,7 +144,7 @@ def _stopped_backend_result(
             backend_status=reported_backend_status,
             elapsed_time=elapsed_time,
             patterns_generated=len(pattern_variables),
-            iterations=1,
+            iterations=iterations,
             completed_objective_stages=completed_objective_stages,
             lower_bound=proven_stock_count,
             upper_bound=(
@@ -247,6 +257,39 @@ def _time_limit_enumeration_result(
     )
 
 
+def _backend_failure_result(
+    *,
+    patterns_generated: int,
+    iterations: int,
+    elapsed_time: float,
+) -> UnverifiedBackendResult:
+    """Return the structured BACKEND_FAILURE outcome for a stage whose own
+    adapter.solve() call raised ``PulpAdapterError``.
+
+    ``iterations`` is the number of solver invocations attempted up to and
+    including the failing one (1 for a primary-stage failure, 2 for
+    secondary, 3 for tertiary), matching the meaning documented for
+    ``Diagnostics.iterations``. An unexpected backend failure makes no
+    mathematical claim, so -- per docs/formats.md's error-diagnostics rules
+    -- no objective stage is reported complete and both bounds are ``None``,
+    even when an earlier stage in this same call did reach a proven optimum.
+    """
+
+    return UnverifiedBackendResult(
+        candidate=None,
+        diagnostics=Diagnostics(
+            termination_reason=TerminationReason.BACKEND_FAILURE,
+            backend_status=BackendStatus.FAILED,
+            elapsed_time=elapsed_time,
+            patterns_generated=patterns_generated,
+            iterations=iterations,
+            completed_objective_stages=(),
+            lower_bound=None,
+            upper_bound=None,
+        ),
+    )
+
+
 def _remaining_stage_options(
     options: BackendOptions,
     deadline: Deadline,
@@ -315,14 +358,22 @@ def solve_exact_enumerated_pipeline(
             options,
             elapsed_time=current_elapsed_time(),
             completed_objective_stages=(),
+            iterations=0,
         )
 
-    primary_result = solve_primary_stock_count_stage(
-        model,
-        stock_count,
-        adapter,
-        stage_1_options,
-    )
+    try:
+        primary_result = solve_primary_stock_count_stage(
+            model,
+            stock_count,
+            adapter,
+            stage_1_options,
+        )
+    except PulpAdapterError:
+        return _backend_failure_result(
+            patterns_generated=len(pattern_variables),
+            iterations=1,
+            elapsed_time=current_elapsed_time(),
+        )
 
     if primary_result.optimal_stock_count is None:
         return _stopped_backend_result(
@@ -332,6 +383,7 @@ def solve_exact_enumerated_pipeline(
             stage_1_options,
             elapsed_time=current_elapsed_time(),
             completed_objective_stages=(),
+            iterations=1,
         )
     '''---stage 2: total-leftover optimization---'''
 
@@ -346,6 +398,7 @@ def solve_exact_enumerated_pipeline(
             completed_objective_stages=(
                 ObjectiveStage.STOCK_PIECE_COUNT,
             ),
+            iterations=1,
             proven_stock_count=primary_result.optimal_stock_count,
         )
 
@@ -356,12 +409,19 @@ def solve_exact_enumerated_pipeline(
         stock_count,
         primary_result.optimal_stock_count,
     )
-    secondary_result = solve_secondary_leftover_stage(
-        model,
-        total_leftover,
-        adapter,
-        stage_2_options,
-    )
+    try:
+        secondary_result = solve_secondary_leftover_stage(
+            model,
+            total_leftover,
+            adapter,
+            stage_2_options,
+        )
+    except PulpAdapterError:
+        return _backend_failure_result(
+            patterns_generated=len(pattern_variables),
+            iterations=2,
+            elapsed_time=current_elapsed_time(),
+        )
 
     if secondary_result.optimal_total_leftover is None:
         return _stopped_backend_result(
@@ -373,6 +433,7 @@ def solve_exact_enumerated_pipeline(
             completed_objective_stages=(
                 ObjectiveStage.STOCK_PIECE_COUNT,
             ),
+            iterations=2,
             proven_stock_count=primary_result.optimal_stock_count,
         )
 
@@ -389,6 +450,7 @@ def solve_exact_enumerated_pipeline(
                 ObjectiveStage.STOCK_PIECE_COUNT,
                 ObjectiveStage.TOTAL_LEFTOVER,
             ),
+            iterations=2,
             proven_stock_count=primary_result.optimal_stock_count,
         )
 
@@ -399,12 +461,19 @@ def solve_exact_enumerated_pipeline(
         total_leftover,
         secondary_result.optimal_total_leftover,
     )
-    tertiary_result = solve_tertiary_pattern_count_stage(
-        model,
-        distinct_pattern_count,
-        adapter,
-        stage_3_options,
-    )
+    try:
+        tertiary_result = solve_tertiary_pattern_count_stage(
+            model,
+            distinct_pattern_count,
+            adapter,
+            stage_3_options,
+        )
+    except PulpAdapterError:
+        return _backend_failure_result(
+            patterns_generated=len(pattern_variables),
+            iterations=3,
+            elapsed_time=current_elapsed_time(),
+        )
 
     if tertiary_result.optimal_distinct_pattern_count is None:
         return _stopped_backend_result(
@@ -417,6 +486,7 @@ def solve_exact_enumerated_pipeline(
                 ObjectiveStage.STOCK_PIECE_COUNT,
                 ObjectiveStage.TOTAL_LEFTOVER,
             ),
+            iterations=3,
             proven_stock_count=primary_result.optimal_stock_count,
         )
 
@@ -494,28 +564,17 @@ class ExactEnumeratedBackend:
             elif not enumeration.patterns:
                 result = _no_pattern_infeasible_result()
             else:
-                try:
-                    result = solve_exact_enumerated_pipeline(
-                        problem,
-                        enumeration.patterns,
-                        self._adapter,
-                        options,
-                        deadline=deadline,
-                    )
-                except PulpAdapterError:
-                    return UnverifiedBackendResult(
-                        candidate=None,
-                        diagnostics=Diagnostics(
-                            termination_reason=TerminationReason.BACKEND_FAILURE,
-                            backend_status=BackendStatus.FAILED,
-                            elapsed_time=perf_counter() - started_at,
-                            patterns_generated=len(enumeration.patterns),
-                            iterations=1,
-                            completed_objective_stages=(),
-                            lower_bound=None,
-                            upper_bound=None,
-                        ),
-                    )
+                # solve_exact_enumerated_pipeline() catches PulpAdapterError
+                # itself, per stage, and returns a structured BACKEND_FAILURE
+                # result with an accurate `iterations` count -- it never lets
+                # the exception propagate here.
+                result = solve_exact_enumerated_pipeline(
+                    problem,
+                    enumeration.patterns,
+                    self._adapter,
+                    options,
+                    deadline=deadline,
+                )
 
         return replace(
             result,

@@ -448,6 +448,14 @@ def _diagnostics_payload(diagnostics: Diagnostics) -> dict[str, object]:
             field="elapsed_time",
         )
 
+    # diagnostics.backend_id and diagnostics.backend_version are
+    # deliberately not included below. The version 1 JSON solution format
+    # is a closed contract (see docs/formats.md, "Unknown fields and format
+    # evolution" and schemas/solution-v1.schema.json's
+    # additionalProperties: false): adding a field to it requires a new
+    # format_version, not a silent addition to version 1. Those two members
+    # exist only on the Python Diagnostics object; see docs/formats.md,
+    # "Diagnostics", for where each Diagnostics field is available.
     return {
         "termination_reason": diagnostics.termination_reason.value,
         "backend_status": diagnostics.backend_status.value,

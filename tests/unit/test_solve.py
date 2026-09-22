@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from importlib import import_module
 from unittest.mock import Mock
 
@@ -176,7 +176,14 @@ def test_backend_diagnostics_are_preserved(
 
     result = solve(problem)
 
-    assert result.diagnostics is raw_result.diagnostics
+    # solve() stamps backend_id/backend_version onto a new Diagnostics
+    # object (see docs/formats.md, "Python-only diagnostics fields"), so
+    # every other field is preserved by value, not by identity.
+    assert result.diagnostics == replace(
+        raw_result.diagnostics,
+        backend_id=backend.backend_id,
+        backend_version=backend.availability.backend_version,
+    )
     assert result.cut_patterns == raw_result.candidate.cut_patterns
     assert result.objective_value is raw_result.candidate.objective_value
 
@@ -213,7 +220,11 @@ def test_expected_backend_outcomes_return_structured_solutions(
     result = solve(problem)
 
     assert result.solution_status is solution_status
-    assert result.diagnostics is diagnostics
+    assert result.diagnostics == replace(
+        diagnostics,
+        backend_id=backend.backend_id,
+        backend_version=backend.availability.backend_version,
+    )
     assert (result.objective_value is not None) is has_candidate
 
 
