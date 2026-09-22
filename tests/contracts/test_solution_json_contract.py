@@ -6,6 +6,20 @@ import pytest
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
+from saw import (
+    BackendStatus,
+    CutPattern,
+    Diagnostics,
+    ObjectiveStage,
+    ObjectiveValue,
+    Solution,
+    SolutionStatus,
+    TerminationReason,
+    VerificationReport,
+    json_from_solution,
+)
+from saw.patterns import Pattern
+
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 SCHEMA_PATH = REPOSITORY_ROOT / "schemas" / "solution-v1.schema.json"
@@ -358,3 +372,210 @@ def test_cut_pattern_counts_and_repetitions_are_distinct_positive_values(
     pattern["piece_counts"]["demand-4"] = 0
     with pytest.raises(ValidationError):
         validator.validate(payload)
+
+
+# =============================================================================
+# json_from_solution: every status's *actual* serializer output validates
+# against the same schema exercised above with hand-built payloads.
+# =============================================================================
+
+
+_CUT_PATTERN = CutPattern(
+    pattern=Pattern("stock-10", {"demand-4": 1, "demand-6": 1}), repetitions=2
+)
+_OBJECTIVE_VALUE = ObjectiveValue(
+    stock_piece_count=2, total_leftover=0, distinct_pattern_count=1
+)
+_VALID_REPORT = VerificationReport(findings=())
+
+
+def _solution_diagnostics(**overrides: object) -> Diagnostics:
+    fields: dict[str, object] = dict(
+        termination_reason=TerminationReason.COMPLETED,
+        backend_status=BackendStatus.OPTIMAL,
+        elapsed_time=0.25,
+        patterns_generated=4,
+        iterations=2,
+        completed_objective_stages=(),
+        lower_bound=None,
+        upper_bound=None,
+    )
+    fields.update(overrides)
+    return Diagnostics(**fields)
+
+
+def _optimal() -> Solution:
+    return Solution(
+        solution_status=SolutionStatus.OPTIMAL,
+        cut_patterns=(_CUT_PATTERN,),
+        objective_value=_OBJECTIVE_VALUE,
+        diagnostics=_solution_diagnostics(
+            backend_status=BackendStatus.OPTIMAL,
+            completed_objective_stages=(
+                ObjectiveStage.STOCK_PIECE_COUNT,
+                ObjectiveStage.TOTAL_LEFTOVER,
+                ObjectiveStage.DISTINCT_PATTERN_COUNT,
+            ),
+            lower_bound=2,
+            upper_bound=2,
+        ),
+        verification_report=_VALID_REPORT,
+    )
+
+
+def _feasible() -> Solution:
+    return Solution(
+        solution_status=SolutionStatus.FEASIBLE,
+        cut_patterns=(_CUT_PATTERN,),
+        objective_value=_OBJECTIVE_VALUE,
+        diagnostics=_solution_diagnostics(
+            termination_reason=TerminationReason.TIME_LIMIT,
+            backend_status=BackendStatus.FEASIBLE,
+            completed_objective_stages=(ObjectiveStage.STOCK_PIECE_COUNT,),
+            lower_bound=2,
+            upper_bound=2,
+        ),
+        verification_report=_VALID_REPORT,
+    )
+
+
+def _infeasible() -> Solution:
+    return Solution(
+        solution_status=SolutionStatus.INFEASIBLE,
+        cut_patterns=(),
+        objective_value=None,
+        diagnostics=_solution_diagnostics(backend_status=BackendStatus.INFEASIBLE),
+        verification_report=None,
+    )
+
+
+def _limit_without_incumbent() -> Solution:
+    return Solution(
+        solution_status=SolutionStatus.LIMIT,
+        cut_patterns=(),
+        objective_value=None,
+        diagnostics=_solution_diagnostics(
+            termination_reason=TerminationReason.TIME_LIMIT,
+            backend_status=BackendStatus.LIMIT_REACHED,
+            completed_objective_stages=(ObjectiveStage.STOCK_PIECE_COUNT,),
+            lower_bound=1,
+        ),
+        verification_report=None,
+    )
+
+
+def _limit_with_incumbent() -> Solution:
+    return Solution(
+        solution_status=SolutionStatus.LIMIT,
+        cut_patterns=(_CUT_PATTERN,),
+        objective_value=_OBJECTIVE_VALUE,
+        diagnostics=_solution_diagnostics(
+            termination_reason=TerminationReason.TIME_LIMIT,
+            backend_status=BackendStatus.LIMIT_REACHED,
+            completed_objective_stages=(ObjectiveStage.STOCK_PIECE_COUNT,),
+            lower_bound=1,
+            upper_bound=2,
+        ),
+        verification_report=_VALID_REPORT,
+    )
+
+
+def _unsupported() -> Solution:
+    return Solution(
+        solution_status=SolutionStatus.UNSUPPORTED,
+        cut_patterns=(),
+        objective_value=None,
+        diagnostics=_solution_diagnostics(
+            termination_reason=TerminationReason.UNSUPPORTED_PROBLEM,
+            backend_status=BackendStatus.NOT_RUN,
+        ),
+        verification_report=None,
+    )
+
+
+def _error() -> Solution:
+    return Solution(
+        solution_status=SolutionStatus.ERROR,
+        cut_patterns=(),
+        objective_value=None,
+        diagnostics=_solution_diagnostics(
+            termination_reason=TerminationReason.BACKEND_FAILURE,
+            backend_status=BackendStatus.FAILED,
+        ),
+        verification_report=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "make_solution",
+    [
+        _optimal,
+        _feasible,
+        _infeasible,
+        _limit_without_incumbent,
+        _limit_with_incumbent,
+        _unsupported,
+        _error,
+    ],
+    ids=[
+        "optimal",
+        "feasible",
+        "infeasible",
+        "limit-without-plan",
+        "limit-with-plan",
+        "unsupported",
+        "error",
+    ],
+)
+def test_json_from_solution_output_validates_for_every_public_status(
+    validator: Draft202012Validator,
+    make_solution,
+) -> None:
+    payload = json.loads(json_from_solution(make_solution()))
+
+    validator.validate(payload)
+
+
+def test_json_from_solution_is_byte_for_byte_deterministic_for_equal_solutions() -> None:
+    assert json_from_solution(_optimal()) == json_from_solution(_optimal())
+    assert json_from_solution(_limit_with_incumbent()) == json_from_solution(
+        _limit_with_incumbent()
+    )
+
+
+def test_json_from_solution_matches_the_documented_optimal_example() -> None:
+    example = json.loads(OPTIMAL_EXAMPLE_PATH.read_text(encoding="utf-8"))
+
+    # Deliberately mirrors examples/json/solution-v1-optimal.json's own
+    # values rather than reusing the generic _optimal() fixture above, whose
+    # numbers (repetitions=2, ...) are chosen for schema-validity coverage,
+    # not to match this specific documented example.
+    solution = Solution(
+        solution_status=SolutionStatus.OPTIMAL,
+        cut_patterns=(
+            CutPattern(
+                pattern=Pattern("stock-10", {"demand-4": 1, "demand-6": 1}),
+                repetitions=1,
+            ),
+        ),
+        objective_value=ObjectiveValue(
+            stock_piece_count=1, total_leftover=0, distinct_pattern_count=1
+        ),
+        diagnostics=Diagnostics(
+            termination_reason=TerminationReason.COMPLETED,
+            backend_status=BackendStatus.OPTIMAL,
+            elapsed_time=0.01,
+            patterns_generated=4,
+            iterations=3,
+            completed_objective_stages=(
+                ObjectiveStage.STOCK_PIECE_COUNT,
+                ObjectiveStage.TOTAL_LEFTOVER,
+                ObjectiveStage.DISTINCT_PATTERN_COUNT,
+            ),
+            lower_bound=1,
+            upper_bound=1,
+        ),
+        verification_report=VerificationReport(findings=()),
+    )
+
+    assert json.loads(json_from_solution(solution)) == example

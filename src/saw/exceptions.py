@@ -2,6 +2,7 @@
 
 from enum import Enum
 
+
 # base class for exceptions raised by saw
 class SawError(Exception):
     pass
@@ -41,9 +42,44 @@ class ValidationError(SawError):
         self.field = field
         self.conflicting_ids = tuple(conflicting_ids)
 
+
+class SerializationErrorCode(str, Enum):
+    """Stable categories for failures while reading versioned data."""
+
+    INVALID_JSON = "invalid_json"
+    UNSUPPORTED_FORMAT_VERSION = "unsupported_format_version"
+    SCHEMA_VIOLATION = "schema_violation"
+    SEMANTIC_VALIDATION = "semantic_validation"
+
+
+class SerializationError(SawError):
+    """Raised when versioned serialized data cannot be read safely.
+
+    ``message`` is intended for people and is not a stable interface. Callers
+    should branch on ``code`` and may use the optional context to identify a
+    record or field without depending on a JSON-schema library's path format.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: SerializationErrorCode,
+        record: str | None = None,
+        record_index: int | None = None,
+        field: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.record = record
+        self.record_index = record_index
+        self.field = field
+
+
 # raised when the requested backend cannot be used
 class BackendUnavailableError(SawError):
     pass
+
 
 # raised when the backend result fails independent verification
 class InternalVerificationError(SawError):

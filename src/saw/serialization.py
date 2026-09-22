@@ -1,0 +1,485 @@
+"""JSON serialization boundary for version 1 Saw problem and solution data.
+
+This module converts a versioned JSON problem request into the existing
+immutable :class:`~saw.models.Problem`, :class:`~saw.models.Stock`, and
+:class:`~saw.models.Demand` models, and converts an existing public
+:class:`~saw.models.Solution` into the version 1 JSON solution result. The
+full version 1 JSON problem and solution format contracts are documented in
+``docs/formats.md``; the companion structural schemas are
+``schemas/problem-v1.schema.json`` and ``schemas/solution-v1.schema.json``.
+This module is the authoritative implementation of the rules JSON Schema
+cannot express (duplicate member names, integer spelling, ID uniqueness, and
+-- on the solution side -- which fields a given ``solution_status`` requires
+or forbids), so it does not depend on a JSON-schema library at run time.
+
+Only JSON *shape* is enforced on the read side: JSON syntax, the closed set
+of object members, and primitive types and spelling. Semantic rules --
+non-empty IDs, positive lengths and quantities, and stock/demand ID
+uniqueness -- are enforced by :func:`saw.validation.validate_problem`, not
+reimplemented in this module, so there is exactly one place those rules
+live.
+
+On the write side, :func:`json_from_solution` trusts the fields of a
+well-formed :class:`~saw.models.Solution` and is responsible only for
+choosing, from ``solution_status`` alone, which of the verified-plan members
+(``cut_patterns``, ``objective_value``, ``verification_report``) to include.
+It does not re-run verification; it raises
+:class:`~saw.exceptions.SerializationError` if the given ``Solution`` cannot
+be represented without contradicting its own declared status.
+
+This module knows nothing about a command-line interface, standard streams,
+exit codes, or input sources. It only turns JSON text that has already been
+read into a :class:`~saw.models.Problem`, or a :class:`~saw.models.Solution`
+into JSON text, raising :class:`~saw.exceptions.SerializationError` when it
+cannot.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+from collections.abc import Callable, Iterable
+
+from saw.exceptions import SerializationError, SerializationErrorCode, ValidationError
+from saw.models import (
+    CutPattern,
+    Demand,
+    Diagnostics,
+    ObjectiveValue,
+    Problem,
+    Solution,
+    SolutionStatus,
+    Stock,
+    VerificationFinding,
+    VerificationReport,
+)
+from saw.validation import validate_problem
+
+__all__ = ("SUPPORTED_FORMAT_VERSION", "json_from_solution", "problem_from_json")
+
+#: The only ``format_version`` value this module accepts.
+SUPPORTED_FORMAT_VERSION = 1
+
+_PROBLEM_MEMBERS = frozenset({"format_version", "stocks", "demands"})
+_STOCK_MEMBERS = frozenset({"stock_id", "material_id", "length", "quantity"})
+_DEMAND_MEMBERS = frozenset({"demand_id", "material_id", "length", "quantity"})
+
+#: Statuses whose verified-plan group (``cut_patterns``, ``objective_value``,
+#: ``verification_report``) is always required, per ``docs/formats.md``.
+_STATUSES_REQUIRING_VERIFIED_PLAN = frozenset(
+    {SolutionStatus.OPTIMAL, SolutionStatus.FEASIBLE}
+)
+
+#: Statuses whose verified-plan group is always forbidden.
+_STATUSES_FORBIDDING_VERIFIED_PLAN = frozenset(
+    {SolutionStatus.INFEASIBLE, SolutionStatus.UNSUPPORTED, SolutionStatus.ERROR}
+)
+
+#: The only status whose verified-plan group is conditional: present in full
+#: with a valid report, or absent in full.
+_STATUS_WITH_OPTIONAL_VERIFIED_PLAN = SolutionStatus.LIMIT
+
+
+class _JsonSyntaxError(ValueError):
+    """A JSON syntax problem this module rejects beyond RFC 8259 parsing."""
+
+
+def problem_from_json(text: str) -> Problem:
+    """Parse a version 1 JSON problem request into a :class:`Problem`.
+
+    Args:
+        text: Already-read JSON text, as described by ``docs/formats.md``.
+
+    Returns:
+        The equivalent immutable :class:`Problem`.
+
+    Raises:
+        SerializationError: if ``text`` is not syntactically valid JSON
+            (including duplicate object member names or non-standard
+            numeric constants such as ``NaN``); if the JSON does not
+            structurally match version 1 of the problem format (missing or
+            unknown members, or a primitive value with the wrong JSON type
+            or spelling); if ``format_version`` is a well-formed integer
+            other than ``1``; or if the assembled problem fails semantic
+            validation performed by :func:`saw.validation.validate_problem`.
+    """
+    payload = _load_json(text)
+    _require_object(payload, "problem")
+    _require_exact_members(payload, _PROBLEM_MEMBERS, "problem")
+    _check_format_version(payload["format_version"])
+
+    stocks = _parse_records(payload["stocks"], "stocks", "stock", _STOCK_MEMBERS, _build_stock)
+    demands = _parse_records(
+        payload["demands"], "demands", "demand", _DEMAND_MEMBERS, _build_demand
+    )
+
+    problem = Problem(stocks=stocks, demands=demands)
+
+    try:
+        validate_problem(problem)
+    except ValidationError as error:
+        raise SerializationError(
+            str(error),
+            code=SerializationErrorCode.SEMANTIC_VALIDATION,
+            record=error.record,
+            record_index=error.record_index,
+            field=error.field,
+        ) from error
+
+    return problem
+
+
+# --- JSON syntax -----------------------------------------------------------
+
+
+def _load_json(text: str) -> object:
+    try:
+        return json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_members,
+            parse_constant=_reject_non_standard_constant,
+        )
+    except json.JSONDecodeError as error:
+        raise SerializationError(
+            f"Input is not valid JSON: {error}",
+            code=SerializationErrorCode.INVALID_JSON,
+        ) from error
+    except _JsonSyntaxError as error:
+        raise SerializationError(
+            str(error),
+            code=SerializationErrorCode.INVALID_JSON,
+        ) from error
+
+
+def _reject_duplicate_members(pairs: Iterable[tuple[str, object]]) -> dict[str, object]:
+    members: dict[str, object] = {}
+    for name, value in pairs:
+        if name in members:
+            raise _JsonSyntaxError(f"Duplicate JSON object member name: {name!r}.")
+        members[name] = value
+    return members
+
+
+def _reject_non_standard_constant(constant: str) -> None:
+    raise _JsonSyntaxError(
+        f"Non-standard JSON numeric constant {constant!r} is not permitted."
+    )
+
+
+# --- Structural shape --------------------------------------------------
+
+
+def _require_object(
+    value: object,
+    kind: str,
+    *,
+    record_index: int | None = None,
+) -> None:
+    if not isinstance(value, dict):
+        raise SerializationError(
+            f"{_record_label(kind, record_index)} must be a JSON object.",
+            code=SerializationErrorCode.SCHEMA_VIOLATION,
+            record=kind,
+            record_index=record_index,
+        )
+
+
+def _require_exact_members(
+    obj: dict[str, object],
+    expected: frozenset[str],
+    kind: str,
+    *,
+    record_index: int | None = None,
+) -> None:
+    actual = set(obj)
+    missing = expected - actual
+    unknown = actual - expected
+    if not missing and not unknown:
+        return
+
+    parts = []
+    if missing:
+        parts.append(f"missing {', '.join(sorted(missing))}")
+    if unknown:
+        parts.append(f"unknown {', '.join(sorted(unknown))}")
+    raise SerializationError(
+        f"{_record_label(kind, record_index)} has invalid members: {'; '.join(parts)}.",
+        code=SerializationErrorCode.SCHEMA_VIOLATION,
+        record=kind,
+        record_index=record_index,
+    )
+
+
+def _record_label(kind: str, record_index: int | None) -> str:
+    if record_index is None:
+        return f"The {kind}"
+    return f"{kind}[{record_index}]"
+
+
+def _check_format_version(value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SerializationError(
+            "format_version must use JSON integer spelling.",
+            code=SerializationErrorCode.SCHEMA_VIOLATION,
+            field="format_version",
+        )
+    if value != SUPPORTED_FORMAT_VERSION:
+        raise SerializationError(
+            f"Unsupported format_version: {value}. Only "
+            f"{SUPPORTED_FORMAT_VERSION} is supported.",
+            code=SerializationErrorCode.UNSUPPORTED_FORMAT_VERSION,
+            field="format_version",
+        )
+
+
+def _parse_records(
+    value: object,
+    array_field: str,
+    record_kind: str,
+    expected_members: frozenset[str],
+    build: Callable[[dict[str, object], int], object],
+) -> tuple[object, ...]:
+    if not isinstance(value, list):
+        raise SerializationError(
+            f"{array_field} must be a JSON array.",
+            code=SerializationErrorCode.SCHEMA_VIOLATION,
+            field=array_field,
+        )
+
+    records = []
+    for index, item in enumerate(value):
+        _require_object(item, record_kind, record_index=index)
+        _require_exact_members(item, expected_members, record_kind, record_index=index)
+        records.append(build(item, index))
+    return tuple(records)
+
+
+def _build_stock(item: dict[str, object], index: int) -> Stock:
+    return Stock(
+        stock_id=_require_string(item["stock_id"], "stock", index, "stock_id"),
+        material_id=_require_string(item["material_id"], "stock", index, "material_id"),
+        length=_require_integer(item["length"], "stock", index, "length"),
+        quantity=_require_integer(item["quantity"], "stock", index, "quantity"),
+    )
+
+
+def _build_demand(item: dict[str, object], index: int) -> Demand:
+    return Demand(
+        demand_id=_require_string(item["demand_id"], "demand", index, "demand_id"),
+        material_id=_require_string(item["material_id"], "demand", index, "material_id"),
+        length=_require_integer(item["length"], "demand", index, "length"),
+        quantity=_require_integer(item["quantity"], "demand", index, "quantity"),
+    )
+
+
+def _require_string(value: object, record_kind: str, index: int, field: str) -> str:
+    if not isinstance(value, str):
+        raise SerializationError(
+            f"{record_kind}[{index}].{field} must use JSON string spelling.",
+            code=SerializationErrorCode.SCHEMA_VIOLATION,
+            record=record_kind,
+            record_index=index,
+            field=field,
+        )
+    return value
+
+
+def _require_integer(value: object, record_kind: str, index: int, field: str) -> int:
+    # bool is a subclass of int in Python, so it must be rejected explicitly;
+    # JSON's own true/false spelling must not satisfy an integer field.
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SerializationError(
+            f"{record_kind}[{index}].{field} must use JSON integer spelling.",
+            code=SerializationErrorCode.SCHEMA_VIOLATION,
+            record=record_kind,
+            record_index=index,
+            field=field,
+        )
+    return value
+
+
+# --- Solution serialization (Python -> JSON) --------------------------------
+
+
+def json_from_solution(solution: Solution) -> str:
+    """Serialize a public :class:`~saw.models.Solution` as version 1 JSON text.
+
+    The verified-plan group (``cut_patterns``, ``objective_value``, and
+    ``verification_report``) is included or omitted based only on
+    ``solution.solution_status`` -- and, for ``limit``, on whether a verified
+    incumbent is present -- never on whether ``solution.cut_patterns`` happens
+    to be empty. An empty ``cut_patterns`` array is a real, verified
+    zero-stock plan and is represented the same way as any other verified
+    plan; it is never treated as an absent one.
+
+    Args:
+        solution: The solution to serialize, as documented in
+            ``docs/formats.md``.
+
+    Returns:
+        The equivalent version 1 JSON solution document as text.
+
+    Raises:
+        SerializationError: if ``solution.solution_status`` requires a
+            verified plan but ``solution.verification_report`` is missing;
+            if ``solution.solution_status`` forbids a verified plan but a
+            ``verification_report`` is present anyway; if a present
+            ``verification_report`` is not itself valid (an invalid report is
+            never evidence for a published plan); or if
+            ``solution.diagnostics.elapsed_time`` is not a finite number.
+    """
+    payload = _solution_payload(solution)
+    try:
+        return json.dumps(payload, allow_nan=False)
+    except ValueError as error:
+        # allow_nan=False turns a non-finite elapsed_time into a ValueError
+        # instead of writing non-standard JSON (NaN/Infinity) to the wire.
+        raise SerializationError(
+            "diagnostics.elapsed_time must be a finite JSON number.",
+            code=SerializationErrorCode.SCHEMA_VIOLATION,
+            field="elapsed_time",
+        ) from error
+
+
+def _solution_payload(solution: Solution) -> dict[str, object]:
+    includes_plan = _includes_verified_plan(solution)
+
+    payload: dict[str, object] = {
+        "format_version": SUPPORTED_FORMAT_VERSION,
+        "solution_status": solution.solution_status.value,
+    }
+
+    if includes_plan:
+        payload["cut_patterns"] = [
+            _cut_pattern_payload(cut_pattern) for cut_pattern in solution.cut_patterns
+        ]
+        payload["objective_value"] = _objective_value_payload(solution.objective_value)
+
+    payload["diagnostics"] = _diagnostics_payload(solution.diagnostics)
+
+    if includes_plan:
+        payload["verification_report"] = _verification_report_payload(
+            solution.verification_report
+        )
+
+    return payload
+
+
+def _includes_verified_plan(solution: Solution) -> bool:
+    """Decide whether the verified-plan group belongs in the output.
+
+    This is the single place that maps ``solution_status`` to plan-group
+    presence, per the table in ``docs/formats.md``. It also enforces that the
+    ``Solution`` given does not contradict its own declared status, so a
+    caller cannot accidentally under- or over-report the plan group by
+    passing an inconsistent value: every field the plan group needs is
+    checked for presence up front, so ``_solution_payload`` can read it
+    unconditionally once this returns ``True``.
+    """
+    status = solution.solution_status
+    has_report = solution.verification_report is not None
+
+    if has_report and not solution.verification_report.is_valid:
+        raise SerializationError(
+            "verification_report must be valid to be attached to a "
+            "published solution; an invalid report is never evidence for a "
+            "published plan.",
+            code=SerializationErrorCode.SCHEMA_VIOLATION,
+            field="verification_report",
+        )
+
+    if status in _STATUSES_FORBIDDING_VERIFIED_PLAN:
+        if has_report:
+            raise SerializationError(
+                f"solution_status {status.value!r} forbids a verified plan, "
+                "but verification_report is present.",
+                code=SerializationErrorCode.SCHEMA_VIOLATION,
+                field="verification_report",
+            )
+        return False
+
+    if status in _STATUSES_REQUIRING_VERIFIED_PLAN:
+        should_include = True
+    else:
+        assert status is _STATUS_WITH_OPTIONAL_VERIFIED_PLAN
+        should_include = has_report
+
+    if not should_include:
+        return False
+
+    if not has_report:
+        raise SerializationError(
+            f"solution_status {status.value!r} requires a verified plan, "
+            "but verification_report is missing.",
+            code=SerializationErrorCode.SCHEMA_VIOLATION,
+            field="verification_report",
+        )
+    if solution.objective_value is None:
+        raise SerializationError(
+            f"solution_status {status.value!r} requires a verified plan, "
+            "but objective_value is missing.",
+            code=SerializationErrorCode.SCHEMA_VIOLATION,
+            field="objective_value",
+        )
+    return True
+
+
+def _cut_pattern_payload(cut_pattern: CutPattern) -> dict[str, object]:
+    return {
+        "stock_id": cut_pattern.stock_id,
+        "piece_counts": dict(cut_pattern.piece_counts),
+        "repetitions": cut_pattern.repetitions,
+    }
+
+
+def _objective_value_payload(objective_value: ObjectiveValue) -> dict[str, object]:
+    return {
+        "stock_piece_count": objective_value.stock_piece_count,
+        "total_leftover": objective_value.total_leftover,
+        "distinct_pattern_count": objective_value.distinct_pattern_count,
+    }
+
+
+def _diagnostics_payload(diagnostics: Diagnostics) -> dict[str, object]:
+    if not math.isfinite(diagnostics.elapsed_time):
+        raise SerializationError(
+            "diagnostics.elapsed_time must be a finite JSON number.",
+            code=SerializationErrorCode.SCHEMA_VIOLATION,
+            field="elapsed_time",
+        )
+
+    return {
+        "termination_reason": diagnostics.termination_reason.value,
+        "backend_status": diagnostics.backend_status.value,
+        "elapsed_time": diagnostics.elapsed_time,
+        "patterns_generated": diagnostics.patterns_generated,
+        "iterations": diagnostics.iterations,
+        "completed_objective_stages": [
+            stage.value for stage in diagnostics.completed_objective_stages
+        ],
+        "lower_bound": diagnostics.lower_bound,
+        "upper_bound": diagnostics.upper_bound,
+    }
+
+
+def _verification_report_payload(report: VerificationReport) -> dict[str, object]:
+    return {
+        "result": report.result.value,
+        "findings": [_verification_finding_payload(finding) for finding in report.findings],
+    }
+
+
+def _verification_finding_payload(finding: VerificationFinding) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "code": finding.code.value,
+        "message": finding.message,
+    }
+    # Context fields apply only when present; they are omitted rather than
+    # set to null so absence is unambiguous, matching docs/formats.md.
+    if finding.stock_id is not None:
+        payload["stock_id"] = finding.stock_id
+    if finding.demand_id is not None:
+        payload["demand_id"] = finding.demand_id
+    if finding.pattern_index is not None:
+        payload["pattern_index"] = finding.pattern_index
+    return payload
