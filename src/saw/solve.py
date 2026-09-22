@@ -21,6 +21,7 @@ from saw.models import (
     SolutionStatus,
     TerminationReason,
 )
+from saw.timing import Deadline
 from saw.validation import validate_problem
 from saw.verification import verify_solution
 
@@ -124,10 +125,14 @@ def _select_backend(
         ) from None
 
 
-def _to_backend_options(options: SolveOptions) -> BackendOptions:
+def _to_backend_options(
+    options: SolveOptions,
+    deadline: Deadline,
+) -> BackendOptions:
     return BackendOptions(
         time_limit_seconds=options.time_limit_seconds,
         pattern_limit=options.pattern_limit,
+        deadline=deadline,
     )
 
 
@@ -229,6 +234,34 @@ def _check_preflight_size_limits(
     return None
 
 
+def _time_limit_solution(started_at: float) -> Solution:
+    """Return the LIMIT/TIME_LIMIT outcome for a deadline already exhausted
+    before the backend could be reached.
+
+    Mirrors _size_limit_solution: a Saw-level preflight outcome that never
+    touches a backend, so backend_status stays NOT_RUN and no candidate or
+    objective stage is claimed. Per docs/resource-limits.md, "remaining
+    end-to-end time" is checked immediately after the problem_size_limit and
+    numeric_magnitude_limit preflight guards and before pattern_limit (which
+    is only ever consulted while enumerating, inside the backend).
+    """
+    return Solution(
+        solution_status=SolutionStatus.LIMIT,
+        cut_patterns=(),
+        objective_value=None,
+        diagnostics=Diagnostics(
+            termination_reason=TerminationReason.TIME_LIMIT,
+            backend_status=BackendStatus.NOT_RUN,
+            elapsed_time=perf_counter() - started_at,
+            patterns_generated=0,
+            iterations=0,
+            completed_objective_stages=(),
+            lower_bound=None,
+            upper_bound=None,
+        ),
+    )
+
+
 def solve(
     problem: Problem,
     options: SolveOptions | None = None,
@@ -253,7 +286,18 @@ def solve(
     if size_limit_solution is not None:
         return size_limit_solution
 
-    backend_options = _to_backend_options(effective_options)
+    # One shared, monotonic deadline for the rest of this call: pattern
+    # enumeration and all three lexicographic objective stages recompute
+    # their remaining time against it instead of each being handed the
+    # originally configured time_limit_seconds again. Per
+    # docs/resource-limits.md, "remaining end-to-end time" is the next
+    # check after the size preflight guards above, before pattern_limit
+    # (checked only later, while the backend enumerates).
+    deadline = Deadline.from_start(started_at, effective_options.time_limit_seconds)
+    if deadline.expired():
+        return _time_limit_solution(started_at)
+
+    backend_options = _to_backend_options(effective_options, deadline)
 
     availability = backend.check_availability()
     if not availability.available:

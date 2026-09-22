@@ -36,6 +36,7 @@ from saw.models import (
     TerminationReason,
 )
 from saw.patterns import Pattern, enumerate_patterns_for_problem
+from saw.timing import Deadline
 
 
 def _termination_reason(
@@ -173,6 +174,58 @@ def _pattern_limit_result(patterns_generated: int) -> UnverifiedBackendResult:
     )
 
 
+def _time_limit_enumeration_result(
+    patterns_generated: int,
+) -> UnverifiedBackendResult:
+    """Return the discarded-enumeration outcome for a deadline hit mid-enumeration.
+
+    Mirrors ``_pattern_limit_result``: per docs/resource-limits.md a partial
+    pattern set is just as unsound to optimize over when the shared
+    end-to-end deadline runs out as it is when ``pattern_limit`` is hit, so
+    it is discarded the same way and never reaches model construction.
+    Unlike ``_pattern_limit_result``, ``patterns_generated`` reports however
+    many patterns had actually been produced when the deadline passed, not
+    a configured ceiling (see the "End-to-end time" row of the termination
+    table in docs/resource-limits.md).
+    """
+
+    return UnverifiedBackendResult(
+        candidate=None,
+        diagnostics=Diagnostics(
+            termination_reason=TerminationReason.TIME_LIMIT,
+            backend_status=BackendStatus.LIMIT_REACHED,
+            elapsed_time=0.0,
+            patterns_generated=patterns_generated,
+            iterations=0,
+            completed_objective_stages=(),
+            lower_bound=None,
+            upper_bound=None,
+        ),
+    )
+
+
+def _remaining_stage_options(
+    options: BackendOptions,
+    deadline: Deadline,
+) -> BackendOptions | None:
+    """Return the options the next objective stage should receive, or
+    ``None`` if its budget is already spent.
+
+    Recomputes the remaining seconds on the shared ``deadline`` right
+    before an expensive solver call, per docs/resource-limits.md ("One
+    end-to-end time budget"): the secondary and tertiary stages must never
+    receive the originally configured ``time_limit_seconds`` again, only
+    whatever is left of it after validation, enumeration, model building,
+    and any earlier stage. Returns ``None`` when the remainder is not
+    positive, in which case the caller must not start that stage at all.
+    """
+
+    remaining = deadline.remaining_seconds()
+    if remaining is not None and remaining <= 0:
+        return None
+    return replace(options, time_limit_seconds=remaining)
+
+
 def solve_exact_enumerated_pipeline(
     problem: Problem,
     patterns: tuple[Pattern, ...],
@@ -180,6 +233,7 @@ def solve_exact_enumerated_pipeline(
     options: BackendOptions,
     *,
     elapsed_time: float | None = None,
+    deadline: Deadline | None = None,
 ) -> UnverifiedBackendResult:
     started_at = perf_counter()
 
@@ -188,16 +242,43 @@ def solve_exact_enumerated_pipeline(
             return elapsed_time
         return perf_counter() - started_at
 
+    # Per docs/resource-limits.md ("One end-to-end time budget"), every
+    # stage below recomputes what remains of the shared deadline instead of
+    # being handed options.time_limit_seconds -- the originally configured
+    # value -- three times over. A caller that already owns a shared
+    # Deadline (solve(), via ExactEnumeratedBackend.solve()) passes it in;
+    # a caller that only has options.time_limit_seconds (a direct unit
+    # test, or a bare call to this function) gets one anchored to this
+    # pipeline's own start, which reproduces the pre-existing single-call
+    # behaviour exactly.
+    effective_deadline = (
+        deadline
+        if deadline is not None
+        else Deadline.from_start(started_at, options.time_limit_seconds)
+    )
+
     '''---stage 1: stock-count optimization---'''
     model, pattern_variables, stock_count = build_primary_stock_count_model(
         problem,
         patterns,
     )
+
+    stage_1_options = _remaining_stage_options(options, effective_deadline)
+    if stage_1_options is None:
+        return _stopped_backend_result(
+            problem,
+            pattern_variables,
+            BackendStatus.LIMIT_REACHED,
+            options,
+            elapsed_time=current_elapsed_time(),
+            completed_objective_stages=(),
+        )
+
     primary_result = solve_primary_stock_count_stage(
         model,
         stock_count,
         adapter,
-        options,
+        stage_1_options,
     )
 
     if primary_result.optimal_stock_count is None:
@@ -205,11 +286,25 @@ def solve_exact_enumerated_pipeline(
             problem,
             pattern_variables,
             primary_result.backend_status,
-            options,
+            stage_1_options,
             elapsed_time=current_elapsed_time(),
             completed_objective_stages=(),
         )
     '''---stage 2: total-leftover optimization---'''
+
+    stage_2_options = _remaining_stage_options(options, effective_deadline)
+    if stage_2_options is None:
+        return _stopped_backend_result(
+            problem,
+            pattern_variables,
+            BackendStatus.LIMIT_REACHED,
+            options,
+            elapsed_time=current_elapsed_time(),
+            completed_objective_stages=(
+                ObjectiveStage.STOCK_PIECE_COUNT,
+            ),
+            proven_stock_count=primary_result.optimal_stock_count,
+        )
 
     total_leftover = configure_secondary_leftover_stage(
         model,
@@ -222,7 +317,7 @@ def solve_exact_enumerated_pipeline(
         model,
         total_leftover,
         adapter,
-        options,
+        stage_2_options,
     )
 
     if secondary_result.optimal_total_leftover is None:
@@ -230,7 +325,7 @@ def solve_exact_enumerated_pipeline(
             problem,
             pattern_variables,
             secondary_result.backend_status,
-            options,
+            stage_2_options,
             elapsed_time=current_elapsed_time(),
             completed_objective_stages=(
                 ObjectiveStage.STOCK_PIECE_COUNT,
@@ -239,6 +334,21 @@ def solve_exact_enumerated_pipeline(
         )
 
     '''---stage 3: distinct-pattern-count optimization---'''
+    stage_3_options = _remaining_stage_options(options, effective_deadline)
+    if stage_3_options is None:
+        return _stopped_backend_result(
+            problem,
+            pattern_variables,
+            BackendStatus.LIMIT_REACHED,
+            options,
+            elapsed_time=current_elapsed_time(),
+            completed_objective_stages=(
+                ObjectiveStage.STOCK_PIECE_COUNT,
+                ObjectiveStage.TOTAL_LEFTOVER,
+            ),
+            proven_stock_count=primary_result.optimal_stock_count,
+        )
+
     distinct_pattern_count = configure_tertiary_pattern_count_stage(
         model,
         problem,
@@ -250,7 +360,7 @@ def solve_exact_enumerated_pipeline(
         model,
         distinct_pattern_count,
         adapter,
-        options,
+        stage_3_options,
     )
 
     if tertiary_result.optimal_distinct_pattern_count is None:
@@ -258,7 +368,7 @@ def solve_exact_enumerated_pipeline(
             problem,
             pattern_variables,
             tertiary_result.backend_status,
-            options,
+            stage_3_options,
             elapsed_time=current_elapsed_time(),
             completed_objective_stages=(
                 ObjectiveStage.STOCK_PIECE_COUNT,
@@ -313,15 +423,30 @@ class ExactEnumeratedBackend:
     ) -> UnverifiedBackendResult:
         started_at = perf_counter()
 
+        # Prefer the shared deadline solve() already anchored (it covers
+        # validation and preflight checks too); a caller that bypasses
+        # solve() and only sets time_limit_seconds gets one anchored here,
+        # which reproduces the pre-existing single-call behaviour exactly.
+        deadline = (
+            options.deadline
+            if options.deadline is not None
+            else Deadline.from_start(started_at, options.time_limit_seconds)
+        )
+
         if not problem.demands:
             result = _empty_demand_result()
         else:
             enumeration = enumerate_patterns_for_problem(
                 problem,
                 options.pattern_limit,
+                deadline=deadline,
             )
 
-            if enumeration.limit_reached:
+            if enumeration.deadline_expired:
+                result = _time_limit_enumeration_result(
+                    enumeration.patterns_generated
+                )
+            elif enumeration.limit_reached:
                 result = _pattern_limit_result(enumeration.patterns_generated)
             elif not enumeration.patterns:
                 result = _no_pattern_infeasible_result()
@@ -332,6 +457,7 @@ class ExactEnumeratedBackend:
                         enumeration.patterns,
                         self._adapter,
                         options,
+                        deadline=deadline,
                     )
                 except PulpAdapterError:
                     return UnverifiedBackendResult(

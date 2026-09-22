@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from saw.models import (
@@ -10,6 +10,7 @@ from saw.models import (
     Problem,
     SolutionStatus,
 )
+from saw.timing import Deadline
 
 
 # resource configuration for the backend
@@ -17,6 +18,19 @@ from saw.models import (
 class BackendOptions:
     time_limit_seconds: float | None = None
     pattern_limit: int | None = None
+    # The shared end-to-end deadline for the current solve() call (see
+    # docs/resource-limits.md, "One end-to-end time budget"). solve()
+    # anchors this once, before problem validation, and threads it down so
+    # the exact_enumerated backend can recompute the remaining time before
+    # pattern enumeration and before each lexicographic stage instead of
+    # reusing time_limit_seconds -- the original configured value -- for
+    # every one of them. compare=False excludes it from equality/hash: two
+    # BackendOptions built from the same configuration are still equal even
+    # though a live Deadline carries a different absolute instant each time
+    # solve() runs. A backend that receives options.deadline is None (for
+    # example a direct unit-test call that never went through solve())
+    # falls back to anchoring its own deadline from time_limit_seconds.
+    deadline: Deadline | None = field(default=None, compare=False)
 
 
 # describes the guarantees and controls a backend provides in general, this will be of more use

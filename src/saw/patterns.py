@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
+from saw.timing import Deadline
+
 # this somehow prevents circular imports, im not sure how
 if TYPE_CHECKING:
     from saw.models import Demand, Problem, Stock
@@ -46,9 +48,9 @@ class Pattern:
 class PatternEnumerationResult:
     """Outcome of a (possibly budget-limited) pattern enumeration pass.
 
-    When ``limit_reached`` is ``False``, ``patterns`` holds every complete,
-    non-empty pattern for the problem and ``patterns_generated`` equals
-    ``len(patterns)``.
+    When neither ``limit_reached`` nor ``deadline_expired`` is ``True``,
+    ``patterns`` holds every complete, non-empty pattern for the problem and
+    ``patterns_generated`` equals ``len(patterns)``.
 
     When ``limit_reached`` is ``True``, enumeration stopped the moment
     generating the next pattern would have exceeded ``pattern_limit``.
@@ -56,11 +58,24 @@ class PatternEnumerationResult:
     ``patterns`` is always empty: per docs/resource-limits.md a pattern-limit
     hit discards the partial enumeration rather than exposing it as if it
     were a complete pattern set.
+
+    When ``deadline_expired`` is ``True``, the shared end-to-end deadline
+    passed before enumeration finished. ``patterns_generated`` is however
+    many patterns had actually been produced at that point (not a
+    configured ceiling), and ``patterns`` is always empty: a partial pattern
+    set is just as unsound to optimize over when time runs out as it is
+    when ``pattern_limit`` is hit, so it is discarded the same way.
+    ``limit_reached`` and ``deadline_expired`` are never both ``True``: per
+    docs/resource-limits.md, enumeration checks the deadline before checking
+    the pattern limit, so an already-expired deadline is reported as
+    ``deadline_expired`` even if the next pattern would also have exceeded
+    ``pattern_limit``.
     """
 
     patterns: tuple[Pattern, ...]
     patterns_generated: int
     limit_reached: bool
+    deadline_expired: bool = False
 
 
 # lazily walks the DFS tree for a single stock, yielding one pattern at a
@@ -122,17 +137,36 @@ def enumerate_patterns_for_single_stock(
 
 # loops over the stocks tuple and enumerates patterns for each one, in
 # order, stopping as soon as generating the next pattern would exceed
-# pattern_limit. The budget is shared across every stock record, matching
-# the pattern_limit row of docs/resource-limits.md ("Complete, non-empty
-# patterns generated across all stock records").
+# pattern_limit, or as soon as the shared deadline has passed. The
+# pattern_limit budget is shared across every stock record, matching the
+# pattern_limit row of docs/resource-limits.md ("Complete, non-empty
+# patterns generated across all stock records"). deadline defaults to an
+# unlimited Deadline(None) so a caller with no time budget at all (or a
+# direct unit test) never needs to construct one.
 def enumerate_patterns_for_problem(
     problem: Problem,
     pattern_limit: int | None = None,
+    *,
+    deadline: Deadline | None = None,
 ) -> PatternEnumerationResult:
     generated: list[Pattern] = []
+    effective_deadline = deadline if deadline is not None else Deadline(None)
 
     for stock in problem.stocks:
         for pattern in _iter_patterns_for_single_stock(stock, problem.demands):
+            # Per docs/resource-limits.md ("During enumeration Saw checks
+            # the time deadline before checking whether the next pattern
+            # would exceed the pattern limit"), the deadline is checked
+            # first: an already-expired deadline is reported as time_limit
+            # even if the next pattern would also have tripped
+            # pattern_limit.
+            if effective_deadline.expired():
+                return PatternEnumerationResult(
+                    patterns=(),
+                    patterns_generated=len(generated),
+                    limit_reached=False,
+                    deadline_expired=True,
+                )
             # Checked before appending: when exactly `pattern_limit`
             # patterns have already been generated, attempting this next
             # (limit + 1)th one is what trips the limit. Reaching exactly

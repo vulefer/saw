@@ -1,12 +1,33 @@
 from itertools import product
 
 import saw.patterns as patterns_module
+import saw.timing as timing_module
 from saw import Demand, Problem, Stock
 from saw.patterns import (
     Pattern,
     enumerate_patterns_for_problem,
     enumerate_patterns_for_single_stock,
 )
+from saw.timing import Deadline
+
+
+class FakeClock:
+    """A controllable, manually-advanced stand-in for time.perf_counter().
+
+    Deadline-related tests monkeypatch ``patterns_module.perf_counter`` with
+    an instance of this so elapsed time is exact and deterministic instead
+    of depending on real wall-clock speed (which would make the tests
+    flaky). The clock only moves when a test explicitly calls ``advance``.
+    """
+
+    def __init__(self, start: float = 0.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
 
 
 CanonicalPattern = tuple[str, tuple[tuple[str, int], ...]]
@@ -365,3 +386,121 @@ def test_pattern_limit_checks_the_budget_while_generating_not_only_after_complet
     # were ever pulled -- the remaining 3 of the stock's 9 patterns were
     # never computed.
     assert len(pulled) == 6
+
+
+# --- deadline (shared end-to-end time budget) -----------------------------
+#
+# These reuse the same 9-pattern fixture as the pattern_limit tests above,
+# and a FakeClock instead of real sleeping so the deadline can be made to
+# expire at an exact, deterministic point (see docs/resource-limits.md,
+# "One end-to-end time budget", and "During enumeration Saw checks the time
+# deadline before checking whether the next pattern would exceed the
+# pattern limit").
+
+
+def test_no_deadline_generates_every_pattern_regardless_of_pattern_limit() -> None:
+    stock, demands = _nine_pattern_stock_and_demands()
+    problem = Problem(stocks=(stock,), demands=demands)
+
+    result = enumerate_patterns_for_problem(problem, deadline=None)
+
+    assert result.deadline_expired is False
+    assert result.limit_reached is False
+    assert result.patterns_generated == 9
+
+
+def test_deadline_expired_before_enumeration_starts_is_reported_immediately(
+    monkeypatch,
+) -> None:
+    stock, demands = _nine_pattern_stock_and_demands()
+    problem = Problem(stocks=(stock,), demands=demands)
+    clock = FakeClock(start=0.0)
+    monkeypatch.setattr(timing_module, "perf_counter", clock)
+    deadline = Deadline.from_start(started_at=0.0, time_limit_seconds=1.0)
+    clock.advance(2.0)  # the deadline (at 1.0) has already passed
+
+    result = enumerate_patterns_for_problem(problem, deadline=deadline)
+
+    assert result.deadline_expired is True
+    assert result.limit_reached is False
+    assert result.patterns_generated == 0
+    assert result.patterns == ()
+
+
+def test_deadline_expiring_mid_enumeration_stops_generation_and_discards_patterns(
+    monkeypatch,
+) -> None:
+    stock, demands = _nine_pattern_stock_and_demands()
+    problem = Problem(stocks=(stock,), demands=demands)
+    clock = FakeClock(start=0.0)
+    monkeypatch.setattr(timing_module, "perf_counter", clock)
+
+    pulled: list[Pattern] = []
+    real_iter = patterns_module._iter_patterns_for_single_stock
+
+    def counting_iter(stock_arg, demands_arg):
+        for index, pattern in enumerate(real_iter(stock_arg, demands_arg)):
+            pulled.append(pattern)
+            if index == 5:
+                # The deadline passes only once 5 patterns have already
+                # been accepted (indices 0-4), proving the check happens
+                # mid-stock rather than only between stocks.
+                clock.advance(10.0)
+            yield pattern
+
+    monkeypatch.setattr(
+        patterns_module, "_iter_patterns_for_single_stock", counting_iter,
+    )
+    deadline = Deadline.from_start(started_at=0.0, time_limit_seconds=1.0)
+
+    result = enumerate_patterns_for_problem(problem, deadline=deadline)
+
+    assert result.deadline_expired is True
+    assert result.limit_reached is False
+    # 5 patterns were already accepted before the 6th pull revealed the
+    # expired deadline; that 6th one is never appended.
+    assert result.patterns_generated == 5
+    assert result.patterns == ()
+    assert len(pulled) == 6
+
+
+def test_deadline_is_checked_before_pattern_limit_when_both_would_trigger(
+    monkeypatch,
+) -> None:
+    stock, demands = _nine_pattern_stock_and_demands()
+    problem = Problem(stocks=(stock,), demands=demands)
+    clock = FakeClock(start=0.0)
+    monkeypatch.setattr(timing_module, "perf_counter", clock)
+    deadline = Deadline.from_start(started_at=0.0, time_limit_seconds=1.0)
+    clock.advance(2.0)  # already expired before the very first pattern
+
+    # pattern_limit=0 would also trip on the very first pattern; the
+    # deadline check must win per docs/resource-limits.md.
+    result = enumerate_patterns_for_problem(
+        problem, pattern_limit=0, deadline=deadline,
+    )
+
+    assert result.deadline_expired is True
+    assert result.limit_reached is False
+
+
+def test_deadline_reached_but_not_exceeded_after_completion_does_not_discard_results(
+    monkeypatch,
+) -> None:
+    """A deadline that is only checked before generating the *next* pattern
+    must not retroactively invalidate a complete enumeration that finished
+    exactly as the clock ran out (docs/resource-limits.md: "A configured
+    threshold that was reached but not exceeded does not replace a
+    completed mathematical result with a limit result.").
+    """
+    stock, demands = _nine_pattern_stock_and_demands()
+    problem = Problem(stocks=(stock,), demands=demands)
+    clock = FakeClock(start=0.0)
+    monkeypatch.setattr(timing_module, "perf_counter", clock)
+    deadline = Deadline.from_start(started_at=0.0, time_limit_seconds=1.0)
+
+    result = enumerate_patterns_for_problem(problem, deadline=deadline)
+
+    assert result.deadline_expired is False
+    assert result.limit_reached is False
+    assert result.patterns_generated == 9

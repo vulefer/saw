@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import pulp
+import pytest
 
+import saw.backends.exact_enumerated.backend as backend_module
+import saw.timing as timing_module
 from saw import Demand, Problem, Stock
 from saw.backends.base import (
     BackendAvailability,
@@ -20,6 +23,28 @@ from saw.models import (
     TerminationReason,
 )
 from saw.patterns import enumerate_patterns_for_problem
+from saw.timing import Deadline
+
+
+class FakeClock:
+    """A controllable, manually-advanced stand-in for time.perf_counter().
+
+    Deadline-sharing tests monkeypatch both the pipeline's own
+    ``perf_counter`` and ``saw.timing``'s with the SAME instance, so a
+    simulated "the solver took N seconds" advance is visible consistently
+    to whichever module reads the clock next. This makes the timing
+    assertions exact and repeatable instead of depending on real
+    wall-clock speed.
+    """
+
+    def __init__(self, start: float = 0.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
 
 
 class FakeAdapter:
@@ -56,6 +81,34 @@ class FeasibleIncumbentAdapter(FakeAdapter):
         for variable in model.variables():
             variable.varValue = 1
         return BackendStatus.FEASIBLE
+
+
+class ClockAdvancingAdapter(FakeAdapter):
+    """A FakeAdapter that simulates spending time on every solve() call.
+
+    Always reports an OPTIMAL, fully-set incumbent (suitable for a
+    single-pattern problem, where every model variable can simply be set to
+    1) so a full three-stage pipeline run can be walked to completion while
+    recording exactly what BackendOptions each stage received.
+    """
+
+    def __init__(self, clock: FakeClock, seconds_per_call: float) -> None:
+        super().__init__(BackendStatus.OPTIMAL)
+        self._clock = clock
+        self._seconds_per_call = seconds_per_call
+        self.received_options: list[BackendOptions] = []
+
+    def solve(
+        self,
+        model: pulp.LpProblem,
+        options: BackendOptions,
+    ) -> BackendStatus:
+        self.solve_calls += 1
+        self.received_options.append(options)
+        self._clock.advance(self._seconds_per_call)
+        for variable in model.variables():
+            variable.varValue = 1
+        return self.status
 
 
 def _one_piece_problem() -> Problem:
@@ -255,3 +308,164 @@ def test_pattern_limit_hit_is_deterministic_across_repeated_backend_calls() -> N
         first.diagnostics.patterns_generated
         == second.diagnostics.patterns_generated
     )
+
+
+# --- one shared end-to-end time budget -------------------------------------
+#
+# See docs/resource-limits.md, "One end-to-end time budget": time_limit_seconds
+# is one deadline for the whole solve, not a fresh allowance re-issued to
+# each of the three lexicographic objective stages. These tests use a fully
+# controllable FakeClock (never real sleeping) so "how much time is left"
+# can be asserted exactly instead of with a flaky real-time race.
+
+
+def test_each_stage_receives_only_what_remains_of_the_shared_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    problem = _one_piece_problem()
+    patterns = enumerate_patterns_for_problem(problem).patterns
+    clock = FakeClock(start=100.0)
+    monkeypatch.setattr(backend_module, "perf_counter", clock)
+    monkeypatch.setattr(timing_module, "perf_counter", clock)
+    adapter = ClockAdvancingAdapter(clock, seconds_per_call=2.0)
+
+    result = solve_exact_enumerated_pipeline(
+        problem,
+        patterns,
+        adapter,  # type: ignore[arg-type]
+        BackendOptions(time_limit_seconds=10.0),
+        deadline=Deadline.from_start(started_at=clock.now, time_limit_seconds=10.0),
+    )
+
+    assert len(adapter.received_options) == 3
+    stage_limits = [
+        options.time_limit_seconds for options in adapter.received_options
+    ]
+    # Each stage receives strictly less than the one before it -- proof the
+    # 10-second budget is shared across the three solver calls rather than
+    # being handed to each of them in full (which would let a
+    # time_limit_seconds=10 configuration consume up to 30 seconds).
+    assert stage_limits == pytest.approx([10.0, 8.0, 6.0])
+    assert result.diagnostics.backend_status is BackendStatus.OPTIMAL
+    assert result.diagnostics.completed_objective_stages == tuple(ObjectiveStage)
+
+
+def test_pipeline_anchors_its_own_deadline_when_none_is_shared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A direct call with only options.time_limit_seconds (no shared
+    Deadline) must behave exactly as it did before deadline-sharing was
+    introduced: each stage still gets a live, positive remaining-time
+    figure derived from that same configured value, anchored to this
+    pipeline call's own start.
+    """
+    problem = _one_piece_problem()
+    patterns = enumerate_patterns_for_problem(problem).patterns
+    clock = FakeClock(start=0.0)
+    monkeypatch.setattr(backend_module, "perf_counter", clock)
+    monkeypatch.setattr(timing_module, "perf_counter", clock)
+    adapter = ClockAdvancingAdapter(clock, seconds_per_call=1.0)
+
+    result = solve_exact_enumerated_pipeline(
+        problem,
+        patterns,
+        adapter,  # type: ignore[arg-type]
+        BackendOptions(time_limit_seconds=10.0),
+    )
+
+    stage_limits = [
+        options.time_limit_seconds for options in adapter.received_options
+    ]
+    assert stage_limits == pytest.approx([10.0, 9.0, 8.0])
+    assert result.diagnostics.backend_status is BackendStatus.OPTIMAL
+
+
+def test_deadline_exhausted_after_a_stage_skips_the_next_solver_call_entirely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    problem = _one_piece_problem()
+    patterns = enumerate_patterns_for_problem(problem).patterns
+    clock = FakeClock(start=0.0)
+    monkeypatch.setattr(backend_module, "perf_counter", clock)
+    monkeypatch.setattr(timing_module, "perf_counter", clock)
+    # Stage 1 alone consumes the entire configured 5-second budget.
+    adapter = ClockAdvancingAdapter(clock, seconds_per_call=5.0)
+
+    result = solve_exact_enumerated_pipeline(
+        problem,
+        patterns,
+        adapter,  # type: ignore[arg-type]
+        BackendOptions(time_limit_seconds=5.0),
+        deadline=Deadline.from_start(started_at=clock.now, time_limit_seconds=5.0),
+    )
+
+    # Stage 2 must never be started: its options.time_limit_seconds would
+    # already be <= 0.
+    assert adapter.solve_calls == 1
+    assert result.candidate is None
+    assert result.diagnostics.backend_status is BackendStatus.LIMIT_REACHED
+    assert result.diagnostics.termination_reason is TerminationReason.TIME_LIMIT
+    assert result.diagnostics.completed_objective_stages == (
+        ObjectiveStage.STOCK_PIECE_COUNT,
+    )
+    # The primary stage's proof is not thrown away just because the
+    # secondary stage never got to run.
+    assert result.diagnostics.lower_bound == 1
+    assert result.diagnostics.upper_bound == 1
+
+
+def test_deadline_already_expired_before_the_pipeline_starts_skips_every_stage() -> None:
+    problem = _one_piece_problem()
+    patterns = enumerate_patterns_for_problem(problem).patterns
+    clock = FakeClock(start=0.0)
+    adapter = ClockAdvancingAdapter(clock, seconds_per_call=0.0)
+
+    result = solve_exact_enumerated_pipeline(
+        problem,
+        patterns,
+        adapter,  # type: ignore[arg-type]
+        BackendOptions(time_limit_seconds=1.0),
+        # Anchored so that, by the time the pipeline checks it, the
+        # deadline has already passed.
+        deadline=Deadline.from_start(started_at=-10.0, time_limit_seconds=1.0),
+    )
+
+    assert adapter.solve_calls == 0
+    assert result.candidate is None
+    assert result.diagnostics.backend_status is BackendStatus.LIMIT_REACHED
+    assert result.diagnostics.termination_reason is TerminationReason.TIME_LIMIT
+    assert result.diagnostics.completed_objective_stages == ()
+    assert result.diagnostics.lower_bound is None
+    assert result.diagnostics.upper_bound is None
+
+
+def test_enumeration_time_limit_is_reported_distinctly_from_pattern_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deadline that expires during enumeration must be reported as
+    TIME_LIMIT (not PATTERN_LIMIT), and must never reach the solver -- the
+    same "discard the partial set" rule pattern_limit already follows (see
+    docs/resource-limits.md).
+    """
+    adapter = FakeAdapter()
+    backend = ExactEnumeratedBackend(adapter)  # type: ignore[arg-type]
+    problem = _multi_pattern_problem()
+    clock = FakeClock(start=1_000.0)
+    monkeypatch.setattr(backend_module, "perf_counter", clock)
+    monkeypatch.setattr(timing_module, "perf_counter", clock)
+    # An explicit, already-expired shared deadline: ExactEnumeratedBackend
+    # prefers options.deadline over anchoring a fresh one from
+    # time_limit_seconds, exactly as solve() -> backend.solve() does.
+    expired_deadline = Deadline.from_start(started_at=0.0, time_limit_seconds=1.0)
+
+    result = backend.solve(
+        problem,
+        BackendOptions(time_limit_seconds=1.0, deadline=expired_deadline),
+    )
+
+    assert adapter.solve_calls == 0
+    assert result.candidate is None
+    assert result.diagnostics.backend_status is BackendStatus.LIMIT_REACHED
+    assert result.diagnostics.termination_reason is TerminationReason.TIME_LIMIT
+    assert result.diagnostics.patterns_generated == 0
+    assert result.diagnostics.completed_objective_stages == ()
