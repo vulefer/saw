@@ -23,6 +23,9 @@ dependencies = [
     "cbcbox>=2.929,<3",
 ]
 
+[project.scripts]
+saw = "saw.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "jsonschema>=4.23,<5",
