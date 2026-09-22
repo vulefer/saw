@@ -25,6 +25,7 @@ EXPECTED_PUBLIC_API = {
     "VerificationFindingCode",
     "VerificationReport",
     "VerificationResult",
+    "json_from_solution",
     "problem_from_json",
     "solve",
     "validate_problem",
