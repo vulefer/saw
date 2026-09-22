@@ -1,0 +1,7 @@
+{
+  "format_version": 1,
+  "error": {
+    "code": "invalid_problem",
+    "message": "Demand record 0 has an invalid quantity."
+  }
+}

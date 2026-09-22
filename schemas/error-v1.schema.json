@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Saw JSON error format version 1",
+  "description": "Structural schema for failures which prevent the Saw CLI from returning a normal version 1 solution payload. See docs/formats.md and docs/cli.md for semantic and exit-code rules.",
+  "type": "object",
+  "required": [
+    "format_version",
+    "error"
+  ],
+  "properties": {
+    "format_version": {
+      "const": 1
+    },
+    "error": {
+      "$ref": "#/$defs/error"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "error": {
+      "type": "object",
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "invalid_cli_usage",
+            "input_read_error",
+            "invalid_json",
+            "unsupported_format_version",
+            "invalid_problem",
+            "backend_unavailable",
+            "internal_verification_error",
+            "internal_error",
+            "output_write_error"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

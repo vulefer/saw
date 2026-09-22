@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Saw JSON problem format version 1",
+  "description": "Structural schema for the Saw version 1 JSON problem contract. Every length is an integer number of millimetres (mm). See docs/formats.md for additional lexical and ID-uniqueness rules.",
+  "type": "object",
+  "required": [
+    "format_version",
+    "stocks",
+    "demands"
+  ],
+  "properties": {
+    "format_version": {
+      "const": 1
+    },
+    "stocks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/stock"
+      }
+    },
+    "demands": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/demand"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "positiveInteger": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "nonEmptyIdentifier": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stock": {
+      "type": "object",
+      "required": [
+        "stock_id",
+        "material_id",
+        "length",
+        "quantity"
+      ],
+      "properties": {
+        "stock_id": {
+          "$ref": "#/$defs/nonEmptyIdentifier"
+        },
+        "material_id": {
+          "$ref": "#/$defs/nonEmptyIdentifier"
+        },
+        "length": {
+          "description": "Stock length in millimetres (mm).",
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "quantity": {
+          "$ref": "#/$defs/positiveInteger"
+        }
+      },
+      "additionalProperties": false
+    },
+    "demand": {
+      "type": "object",
+      "required": [
+        "demand_id",
+        "material_id",
+        "length",
+        "quantity"
+      ],
+      "properties": {
+        "demand_id": {
+          "$ref": "#/$defs/nonEmptyIdentifier"
+        },
+        "material_id": {
+          "$ref": "#/$defs/nonEmptyIdentifier"
+        },
+        "length": {
+          "description": "Demand length in millimetres (mm).",
+          "$ref": "#/$defs/positiveInteger"
+        },
+        "quantity": {
+          "$ref": "#/$defs/positiveInteger"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
