@@ -2,6 +2,7 @@
 
 from saw.exceptions import (
     BackendUnavailableError,
+    ErrorCode,
     InternalVerificationError,
     SawError,
     SerializationError,
@@ -26,8 +27,13 @@ from saw.models import (
     VerificationReport,
     VerificationResult,
 )
-from saw.serialization import json_from_solution, problem_from_json
-from saw.solve import SolveOptions, solve
+from saw.serialization import (
+    json_from_error,
+    json_from_solution,
+    problem_from_bytes,
+    problem_from_json,
+)
+from saw.solve import InvalidSolveOptionsError, SolveOptions, solve
 from saw.validation import validate_problem
 from saw.verification import verify_solution
 
@@ -37,7 +43,9 @@ __all__ = (
     "CutPattern",
     "Demand",
     "Diagnostics",
+    "ErrorCode",
     "InternalVerificationError",
+    "InvalidSolveOptionsError",
     "ObjectiveStage",
     "ObjectiveValue",
     "Problem",
@@ -55,7 +63,9 @@ __all__ = (
     "VerificationFindingCode",
     "VerificationReport",
     "VerificationResult",
+    "json_from_error",
     "json_from_solution",
+    "problem_from_bytes",
     "problem_from_json",
     "solve",
     "validate_problem",

@@ -31,6 +31,16 @@ for that v0.2.0 work are defined in the
 [v0.2.0 resource-limit contract](resource-limits.md). That contract does not
 retroactively change v0.1.0 behavior.
 
+## Exact-backend numeric range
+
+The exact backend hands its model to CBC through a model file that stores
+every number with 13 significant digits, so larger integers would reach CBC
+already rounded. The backend therefore reports `unsupported` (CLI exit code
+`5`) for any problem whose total stock length (the sum of `length * quantity`
+over all stock records) or largest demand quantity exceeds `10**12`, instead
+of solving a rounded model. With the default `numeric_magnitude_limit` this
+only affects very large inputs; disabling that limit does not lift this one.
+
 ## Unsupported cutting and inventory semantics
 
 v0.1.0 does not support:

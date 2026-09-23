@@ -75,6 +75,35 @@ class SerializationError(SawError):
         self.record_index = record_index
         self.field = field
 
+    @property
+    def error_code(self) -> "ErrorCode":
+        """The version 1 error-envelope code for this failure."""
+        return _SERIALIZATION_ERROR_CODES[self.code]
+
+
+class ErrorCode(str, Enum):
+    """The closed set of version 1 error-envelope codes (docs/formats.md)."""
+
+    INVALID_CLI_USAGE = "invalid_cli_usage"
+    INVALID_JSON = "invalid_json"
+    UNSUPPORTED_FORMAT_VERSION = "unsupported_format_version"
+    INVALID_PROBLEM = "invalid_problem"
+    BACKEND_UNAVAILABLE = "backend_unavailable"
+    INTERNAL_ERROR = "internal_error"
+    INTERNAL_VERIFICATION_ERROR = "internal_verification_error"
+    INPUT_READ_ERROR = "input_read_error"
+    OUTPUT_WRITE_ERROR = "output_write_error"
+
+
+# A problem that fails its schema or its semantic validation is reported the
+# same way: the document was readable but is not a valid problem.
+_SERIALIZATION_ERROR_CODES: dict[SerializationErrorCode, ErrorCode] = {
+    SerializationErrorCode.INVALID_JSON: ErrorCode.INVALID_JSON,
+    SerializationErrorCode.UNSUPPORTED_FORMAT_VERSION: ErrorCode.UNSUPPORTED_FORMAT_VERSION,
+    SerializationErrorCode.SCHEMA_VIOLATION: ErrorCode.INVALID_PROBLEM,
+    SerializationErrorCode.SEMANTIC_VALIDATION: ErrorCode.INVALID_PROBLEM,
+}
+
 
 # raised when the requested backend cannot be used
 class BackendUnavailableError(SawError):

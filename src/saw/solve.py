@@ -26,6 +26,17 @@ from saw.validation import validate_problem
 from saw.verification import verify_solution
 
 
+class InvalidSolveOptionsError(ValueError):
+    """A ``SolveOptions`` value was rejected before backend selection.
+
+    Subclasses ``ValueError`` so Python callers keep the documented
+    contract (docs/resource-limits.md: invalid options "raise
+    ``ValueError``"), while the CLI can map exactly this caller
+    configuration error to ``invalid_cli_usage`` without also swallowing an
+    unrelated ``ValueError`` raised by a backend bug.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class SolveOptions:
     # backend selection wrapper
@@ -59,11 +70,11 @@ def _validate_solve_options(options: SolveOptions) -> None:
     ``_select_backend`` so unknown-backend handling remains deterministic
     and unaffected by this check.
 
-    Every rejection raises ``ValueError``, matching the resource-limit
-    contract in docs/resource-limits.md: booleans are not numbers, and
-    zero, negative, non-finite, fractional-for-an-integer-limit, or
-    wrong-typed values are all invalid configuration, never a solution
-    result.
+    Every rejection raises ``InvalidSolveOptionsError`` (a ``ValueError``),
+    matching the resource-limit contract in docs/resource-limits.md:
+    booleans are not numbers, and zero, negative, non-finite,
+    fractional-for-an-integer-limit, or wrong-typed values are all invalid
+    configuration, never a solution result.
     """
     _require_backend_identifier(options.backend)
     _require_optional_finite_positive_number(
@@ -80,7 +91,7 @@ def _validate_solve_options(options: SolveOptions) -> None:
 
 def _require_backend_identifier(value: object) -> None:
     if not isinstance(value, str) or value == "":
-        raise ValueError(
+        raise InvalidSolveOptionsError(
             f"Invalid backend {value!r}: backend must be a non-empty string."
         )
 
@@ -97,7 +108,7 @@ def _require_optional_finite_positive_number(value: object, field: str) -> None:
         or not math.isfinite(value)
         or value <= 0
     ):
-        raise ValueError(
+        raise InvalidSolveOptionsError(
             f"Invalid {field} {value!r}: must be a finite real number "
             "greater than zero, or None."
         )
@@ -108,7 +119,7 @@ def _require_optional_positive_integer(value: object, field: str) -> None:
     if value is None:
         return
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(
+        raise InvalidSolveOptionsError(
             f"Invalid {field} {value!r}: must be a positive integer, or "
             "None."
         )
@@ -122,7 +133,7 @@ def _select_backend(
         return backends[backend_id]
     except KeyError:
         available_ids = ", ".join(sorted(backends))
-        raise ValueError(
+        raise InvalidSolveOptionsError(
             f"Unknown backend {backend_id!r}. "
             f"Available backends: {available_ids}."
         ) from None

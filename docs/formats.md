@@ -70,6 +70,9 @@ Unknown or missing members are invalid.
 
 - The input must be a JSON text as defined by RFC 8259. Duplicate member names
   in any JSON object are invalid, even if the repeated values are equal.
+- Arrays and objects may be nested at most 64 levels deep (a valid problem
+  needs three). Deeper input is invalid JSON on every platform, whether or not
+  a particular parser could have read it.
 - `length` and `quantity` use JSON integer spelling: an optional minus sign
   followed by base-10 digits, with no decimal point or exponent. The value must
   be greater than zero. Therefore `1.0`, `1e0`, strings such as `"1"`, and the

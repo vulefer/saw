@@ -8,6 +8,7 @@ import sys
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 RELEASE_TEST_PATHS = (
     "tests/unit",
+    "tests/integration",
     "tests/regression",
     "tests/oracle",
     "tests/compatibility",
