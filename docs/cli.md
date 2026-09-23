@@ -17,7 +17,9 @@ complete JSON document followed by a newline:
 Progress, warnings, tracebacks, solver logs, and other human diagnostics must
 never be written to standard output. They may be written to standard error.
 Redirecting or suppressing standard error therefore cannot change the JSON
-document on standard output.
+document on standard output. While solving, the CLI redirects Python-level
+standard output to standard error, so a stray `print()` or solver log from a
+backend or third-party library cannot corrupt the JSON document.
 
 An output write failure is the unavoidable exception: the CLI exits with code
 `74`, attempts a concise diagnostic on standard error, and makes no claim that
@@ -95,6 +97,35 @@ failure before a result existed. Callers inspect `solution_status` or
 `error.code` for that detail. A non-zero exit code does not by itself mean that
 standard output is an error envelope: infeasible, limit, unsupported, and
 structured backend-error outcomes are solution envelopes.
+
+## Failure modes
+
+Every expected failure mode maps to exactly one outcome:
+
+| Failure | Exit code | Standard-output document |
+| --- | ---: | --- |
+| Unknown option, non-numeric or rejected limit value, unknown backend | `2` | `invalid_cli_usage` |
+| Empty, non-UTF-8, malformed, or too deeply nested JSON; duplicate members; `NaN`/`Infinity` | `2` | `invalid_json` |
+| Problem `format_version` other than `1` | `2` | `unsupported_format_version` |
+| Structurally or semantically invalid problem | `2` | `invalid_problem` |
+| Infeasibility proved | `3` | Solution envelope, `infeasible` |
+| Size, time, or pattern limit reached | `4` | Solution envelope, `limit` |
+| Problem outside the backend's supported scope | `5` | Solution envelope, `unsupported` |
+| CBC (or another backend dependency) not available, before or during solving | `6` | `backend_unavailable` |
+| Backend reports a failure status | `70` | Solution envelope, `error` |
+| Missing or corrupted candidate for `optimal`, `feasible`, or a `limit` incumbent | `70` | `internal_verification_error` |
+| Any other exception, or an internally inconsistent result | `70` | `internal_error` |
+| Input source cannot be opened or read | `74` | `input_read_error` |
+| Standard output cannot be written | `74` | None guaranteed |
+
+An internal failure never produces a plan, an objective value, or an
+`optimal`, `feasible`, or `infeasible` status: once solving fails, no
+mathematical claim is made. The `internal_error` message is generic; the
+exception class and message are written to standard error as a one-line
+diagnostic. `--traceback` adds the full traceback to standard error for
+internal and backend failures (exit codes `6` and `70`). Tracebacks never
+appear on standard output, and input and usage errors (exit code `2`) never
+print one.
 
 ## Outcome precedence
 

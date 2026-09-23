@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import argparse
 import codecs
+import contextlib
+import io
 import json
 import os
 import sys
@@ -338,6 +340,40 @@ def _print_traceback(stderr: IO[str] | None) -> None:
         pass
 
 
+class _StderrSink(io.TextIOBase):
+    """A text stream that forwards writes to standard error, best effort.
+
+    Installed as ``sys.stdout`` while ``solve()`` runs, so a stray
+    ``print()`` or solver log from a backend or a third-party library lands
+    on standard error instead of corrupting the one JSON document on
+    standard output (docs/cli.md, "Standard streams"). Write failures are
+    swallowed: standard error is advisory and must never turn into a solve
+    failure.
+    """
+
+    def __init__(self, stderr: IO[str] | None) -> None:
+        super().__init__()
+        self._stderr = stderr
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, text: str) -> int:
+        if self._stderr is not None:
+            try:
+                self._stderr.write(text)
+            except (OSError, ValueError, AttributeError):
+                pass
+        return len(text)
+
+    def flush(self) -> None:
+        if self._stderr is not None:
+            try:
+                self._stderr.flush()
+            except (OSError, ValueError, AttributeError):
+                pass
+
+
 def _discard_further_stdout_writes(stdout: IO[str]) -> None:
     """Point the process's standard output at the null device.
 
@@ -506,7 +542,8 @@ def _run_solve(
         # The only solving entry point: solve() validates the options,
         # selects the backend, runs it, and independently verifies any
         # candidate before returning it (docs/guarantees.md).
-        solution = solve(problem, options)
+        with contextlib.redirect_stdout(_StderrSink(stderr)):
+            solution = solve(problem, options)
     except InvalidSolveOptionsError as error:
         # A caller configuration error (docs/resource-limits.md), not a
         # solve outcome. Any other ValueError is an internal failure and is
@@ -540,10 +577,22 @@ def _run_solve(
             stdout, stderr, "internal_error", str(error), exit_code=70,
         )
 
+    # Resolved before writing: once the solution envelope is on standard
+    # output, a failure here could only be reported with a second document.
+    exit_code = _SOLUTION_STATUS_EXIT_CODES.get(solution.solution_status)
+    if exit_code is None:
+        return _emit_error(
+            stdout, stderr, "internal_error",
+            "An internal error prevented a result; see standard error.",
+            exit_code=70,
+            diagnostic=(
+                "internal error: solve() returned an unmapped solution "
+                f"status {solution.solution_status!r}"
+            ),
+        )
+
     write_failure = _write_document(stdout, stderr, payload)
-    if write_failure is not None:
-        return write_failure
-    return _SOLUTION_STATUS_EXIT_CODES[solution.solution_status]
+    return write_failure if write_failure is not None else exit_code
 
 
 def main(

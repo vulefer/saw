@@ -149,6 +149,14 @@ def _load_json(text: str) -> object:
             str(error),
             code=SerializationErrorCode.INVALID_JSON,
         ) from error
+    except RecursionError as error:
+        # Pathologically deep nesting exhausts the parser's stack. No
+        # version 1 problem nests more than a few levels, so this is
+        # unacceptable input, not an internal failure.
+        raise SerializationError(
+            "Input is not valid JSON: arrays or objects are nested too deeply.",
+            code=SerializationErrorCode.INVALID_JSON,
+        ) from None
 
 
 def _reject_duplicate_members(pairs: Iterable[tuple[str, object]]) -> dict[str, object]:
