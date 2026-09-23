@@ -22,6 +22,7 @@ def test_release_command_runs_every_required_suite(
             "-m",
             "pytest",
             "tests/unit",
+            "tests/integration",
             "tests/regression",
             "tests/oracle",
             "tests/compatibility",
