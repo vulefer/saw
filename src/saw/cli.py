@@ -14,6 +14,12 @@ CLI-supplied limit value is converted from text to a Python number (or
 ``saw.solve`` alone decide whether the value is valid. This keeps the
 argument parser independent of solver implementation details, per
 ``docs/resource-limits.md``.
+
+The CLI never imports or calls an optimization backend. Parsing,
+validation, option checking, backend selection, solving, and independent
+verification all happen inside the same public functions a Python caller
+uses, so every plan the CLI emits has passed the same verification gate as
+:func:`saw.solve.solve`.
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ import sys
 import textwrap
 import traceback
 from importlib import metadata
+from dataclasses import dataclass
 from typing import IO, Callable
 
 from saw.exceptions import (
@@ -36,7 +43,7 @@ from saw.exceptions import (
 )
 from saw.models import SolutionStatus
 from saw.serialization import json_from_solution, problem_from_json
-from saw.solve import SolveOptions, solve
+from saw.solve import InvalidSolveOptionsError, SolveOptions, solve
 
 __all__ = ("build_parser", "main")
 
@@ -111,12 +118,14 @@ def _package_version() -> str:
         return "unknown"
 
 
-def _optional_value_type(convert: Callable[[str], object]) -> Callable[[str], object]:
+def _optional_value_type(
+    convert: Callable[[str], object], expected: str,
+) -> Callable[[str], object]:
     """Build an argparse ``type=`` callable that also accepts ``none``.
 
-    Only performs the text-to-number conversion "none" -> ``None`` sentinel
-    handling; it deliberately does not check sign, finiteness, or
-    integer-ness, since those rules belong to ``saw.solve`` alone.
+    Only performs the text-to-number conversion and the "none" -> ``None``
+    sentinel handling; it deliberately does not check sign or finiteness,
+    since those rules belong to ``saw.solve`` alone.
     """
 
     def convert_or_none(raw: str) -> object:
@@ -125,9 +134,76 @@ def _optional_value_type(convert: Callable[[str], object]) -> Callable[[str], ob
         try:
             return convert(raw)
         except ValueError as error:
-            raise argparse.ArgumentTypeError(str(error)) from error
+            raise argparse.ArgumentTypeError(
+                f"invalid value {raw!r}: expected {expected} or 'none'"
+            ) from error
 
     return convert_or_none
+
+
+@dataclass(frozen=True)
+class _LimitFlag:
+    """One ``--*-limit`` option and the ``SolveOptions`` field it sets."""
+
+    flag: str
+    field: str
+    convert: Callable[[str], object]
+    expected: str
+    metavar: str
+    help: str
+
+
+# The explicit, complete CLI -> SolveOptions mapping for resource limits.
+# Each flag sets exactly the named SolveOptions field and nothing else;
+# _solve_options_from_args builds SolveOptions from this table alone, and a
+# unit test keeps it in one-to-one correspondence with SolveOptions' fields.
+_LIMIT_FLAGS: tuple[_LimitFlag, ...] = (
+    _LimitFlag(
+        flag="--time-limit",
+        field="time_limit_seconds",
+        convert=float,
+        expected="a number of seconds",
+        metavar="SECONDS|none",
+        help="End-to-end wall-clock budget for the solve, in seconds",
+    ),
+    _LimitFlag(
+        flag="--pattern-limit",
+        field="pattern_limit",
+        convert=int,
+        expected="an integer",
+        metavar="COUNT|none",
+        help="Maximum number of cut patterns enumerated",
+    ),
+    _LimitFlag(
+        flag="--problem-size-limit",
+        field="problem_size_limit",
+        convert=int,
+        expected="an integer",
+        metavar="COUNT|none",
+        help="Maximum combined stock and demand record count",
+    ),
+    _LimitFlag(
+        flag="--numeric-magnitude-limit",
+        field="numeric_magnitude_limit",
+        convert=int,
+        expected="an integer",
+        metavar="VALUE|none",
+        help="Maximum stock/demand length or quantity",
+    ),
+)
+
+
+def _solve_options_from_args(args: argparse.Namespace) -> SolveOptions:
+    """Map parsed arguments onto ``SolveOptions`` field by field.
+
+    Values pass through unchanged; ``solve()`` validates them exactly as it
+    would for a Python caller and raises ``InvalidSolveOptionsError`` for an
+    invalid one.
+    """
+    return SolveOptions(
+        backend=args.backend,
+        **{limit.field: getattr(args, limit.field) for limit in _LIMIT_FLAGS},
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -216,50 +292,16 @@ def _add_solve_subcommand(subparsers: argparse._SubParsersAction) -> None:
         metavar="ID",
         help=f"Backend to solve with (default: {_DEFAULT_OPTIONS.backend!r}).",
     )
-    parser.add_argument(
-        "--time-limit",
-        dest="time_limit_seconds",
-        type=_optional_value_type(float),
-        default=_DEFAULT_OPTIONS.time_limit_seconds,
-        metavar="SECONDS|none",
-        help=(
-            "End-to-end wall-clock budget for the solve, in seconds, or "
-            f"'none' to disable it (default: {_DEFAULT_OPTIONS.time_limit_seconds})."
-        ),
-    )
-    parser.add_argument(
-        "--pattern-limit",
-        dest="pattern_limit",
-        type=_optional_value_type(int),
-        default=_DEFAULT_OPTIONS.pattern_limit,
-        metavar="COUNT|none",
-        help=(
-            "Maximum number of cut patterns enumerated, or 'none' to "
-            f"disable it (default: {_DEFAULT_OPTIONS.pattern_limit})."
-        ),
-    )
-    parser.add_argument(
-        "--problem-size-limit",
-        dest="problem_size_limit",
-        type=_optional_value_type(int),
-        default=_DEFAULT_OPTIONS.problem_size_limit,
-        metavar="COUNT|none",
-        help=(
-            "Maximum combined stock and demand record count, or 'none' to "
-            f"disable it (default: {_DEFAULT_OPTIONS.problem_size_limit})."
-        ),
-    )
-    parser.add_argument(
-        "--numeric-magnitude-limit",
-        dest="numeric_magnitude_limit",
-        type=_optional_value_type(int),
-        default=_DEFAULT_OPTIONS.numeric_magnitude_limit,
-        metavar="VALUE|none",
-        help=(
-            "Maximum stock/demand length or quantity, or 'none' to "
-            f"disable it (default: {_DEFAULT_OPTIONS.numeric_magnitude_limit})."
-        ),
-    )
+    for limit in _LIMIT_FLAGS:
+        default = getattr(_DEFAULT_OPTIONS, limit.field)
+        parser.add_argument(
+            limit.flag,
+            dest=limit.field,
+            type=_optional_value_type(limit.convert, limit.expected),
+            default=default,
+            metavar=limit.metavar,
+            help=f"{limit.help}, or 'none' to disable it (default: {default}).",
+        )
     parser.add_argument(
         "--traceback",
         action="store_true",
@@ -458,19 +500,18 @@ def _run_solve(
             str(error), exit_code=2,
         )
 
-    options = SolveOptions(
-        backend=args.backend,
-        time_limit_seconds=args.time_limit_seconds,
-        pattern_limit=args.pattern_limit,
-        problem_size_limit=args.problem_size_limit,
-        numeric_magnitude_limit=args.numeric_magnitude_limit,
-    )
+    options = _solve_options_from_args(args)
 
     try:
+        # The only solving entry point: solve() validates the options,
+        # selects the backend, runs it, and independently verifies any
+        # candidate before returning it (docs/guarantees.md).
         solution = solve(problem, options)
-    except ValueError as error:
-        # solve() reserves ValueError for invalid SolveOptions, a caller
-        # configuration error (docs/resource-limits.md), not a solve outcome.
+    except InvalidSolveOptionsError as error:
+        # A caller configuration error (docs/resource-limits.md), not a
+        # solve outcome. Any other ValueError is an internal failure and is
+        # left to main()'s internal_error mapping (docs/cli.md, "Outcome
+        # precedence").
         return _emit_error(
             stdout, stderr, "invalid_cli_usage", str(error), exit_code=2,
         )

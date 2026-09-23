@@ -39,6 +39,35 @@ envelope; the CLI mirrors each error message as a one-line diagnostic on
 standard error, where such details may appear. A full traceback is written to
 standard error only when requested with `--traceback`.
 
+## Solve path
+
+The CLI is a thin adapter over the public Python API. It parses input with
+`problem_from_json`, solves with `solve`, and serializes with
+`json_from_solution`. It never calls an optimization backend directly. Option
+validation, backend selection, solving, and independent verification all
+happen inside `solve()`, so every plan the CLI emits has passed the same
+verification gate as a Python caller's result. For the same request and
+options, the CLI and Python produce the same semantic result; only
+`diagnostics.elapsed_time` may differ between runs.
+
+Each limit option sets exactly one `SolveOptions` field and passes its value
+through unchanged. Omitting an option uses the `SolveOptions` default, and the
+literal `none` disables the limit:
+
+| Option | `SolveOptions` field |
+| --- | --- |
+| `--backend` | `backend` |
+| `--time-limit` | `time_limit_seconds` |
+| `--pattern-limit` | `pattern_limit` |
+| `--problem-size-limit` | `problem_size_limit` |
+| `--numeric-magnitude-limit` | `numeric_magnitude_limit` |
+
+A value that is not a number maps to `invalid_cli_usage`. A number that
+`SolveOptions` validation rejects (such as zero, a negative value, or a
+non-finite value) and an unknown backend also map to `invalid_cli_usage`, with
+the same message that `solve()` raises. Any other exception raised while
+solving is an internal failure (exit code `70`).
+
 ## Exit codes
 
 Exit codes are integers in the portable range `0` through `125`. Their meanings
