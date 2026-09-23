@@ -506,6 +506,23 @@ def test_unexpected_exception_exits_70_as_internal_error(
     assert "Traceback (most recent call last)" not in stderr
 
 
+def test_keyboard_interrupt_exits_130_without_a_document_or_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def interrupted_solve(problem, options):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "solve", interrupted_solve)
+
+    exit_code, stdout, stderr = _run(["solve"], stdin_text=_VALID_PROBLEM_JSON)
+
+    assert exit_code == 130
+    # docs/cli.md, "Interruption": outside the outcome contract, so no
+    # document, and the caller's own Ctrl+C is not reported as a crash.
+    assert stdout == ""
+    assert stderr == "saw: interrupted\n"
+
+
 def test_traceback_flag_writes_the_traceback_to_stderr_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -683,3 +700,40 @@ def test_help_documents_input_modes_output_behavior_and_limits(
     assert "Standard output" in out
     assert "--time-limit" in out
     assert "--pattern-limit" in out
+
+
+def test_an_integer_past_the_digit_limit_is_named_as_too_long() -> None:
+    exit_code, stdout, _ = _run(
+        ["solve", "--pattern-limit", "9" * 5000], stdin_text=_VALID_PROBLEM_JSON,
+    )
+
+    assert exit_code == 2
+    message = json.loads(stdout)["error"]["message"]
+    assert "too many digits" in message
+    # The argument is echoed back only in shortened form.
+    assert len(message) < 200
+
+
+class _TerminalStdin(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def test_an_interactive_stdin_gets_a_hint_on_stderr() -> None:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    exit_code = cli.main(
+        ["solve"], stdin=_TerminalStdin(_VALID_PROBLEM_JSON), stdout=stdout, stderr=stderr,
+    )
+
+    assert exit_code == 0
+    assert "reading the problem from standard input" in stderr.getvalue()
+    assert json.loads(stdout.getvalue())["solution_status"] == "optimal"
+
+
+def test_a_piped_stdin_gets_no_hint() -> None:
+    exit_code, _, stderr = _run(["solve"], stdin_text=_VALID_PROBLEM_JSON)
+
+    assert exit_code == 0
+    assert stderr == ""

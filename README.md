@@ -6,9 +6,9 @@ The authoritative definition of the v0.1.0 problem is in
 
 The independently versioned JSON problem, solution, and error formats are
 defined in [docs/formats.md](docs/formats.md). Their version 1 contracts are
-specified before the parser and command-line interface are implemented. The
-solution contract makes plan presence status-dependent, so an omitted plan
-cannot be mistaken for an empty or verified plan. The future CLI's stable
+the reference for the parser, the serializer, and the command-line interface.
+The solution contract makes plan presence status-dependent, so an omitted plan
+cannot be mistaken for an empty or verified plan. The `saw` command's usage,
 outcome, exit-code, and standard-stream rules are defined in
 [docs/cli.md](docs/cli.md).
 
@@ -65,6 +65,22 @@ and can be run from the repository root with:
 ```shell
 python examples/minimal.py
 ```
+
+## Command-line example
+
+Installing the package provides the `saw` command. It reads a version 1 JSON
+problem from a file or standard input and writes exactly one JSON document --
+a solution or an error envelope -- to standard output:
+
+```shell
+python -m pip install .
+saw solve examples/json/problem-v1-valid.json
+```
+
+The exit code is `0` for a verified `optimal` or `feasible` plan and non-zero
+for every other outcome (for example `2` for invalid input, `3` for proved
+infeasibility, `4` for a reached resource limit); see
+[docs/cli.md](docs/cli.md) for the full table and all options.
 
 ## Compatibility
 

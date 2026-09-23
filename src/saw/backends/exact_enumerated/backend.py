@@ -39,6 +39,30 @@ from saw.patterns import Pattern, enumerate_patterns_for_problem
 from saw.timing import Deadline
 
 
+# PuLP writes every coefficient, bound, and right-hand side to the CBC model
+# file with 13 significant digits ("% .12e"), so a larger integer reaches
+# CBC already rounded and the solved objective no longer matches the plan.
+# 10**12 leaves a margin below that; it is also far below 2**53, where CBC's
+# own double arithmetic stops being exact.
+MAX_EXACT_MODEL_VALUE: Final[int] = 10**12
+
+
+def _largest_model_value(problem: Problem) -> int:
+    """Bound every integer the exact model can contain for ``problem``.
+
+    Leftover coefficients are at most a stock length, and every right-hand
+    side is a record quantity or a fixed stage optimum. A stage optimum is at
+    most the total stock count or the total stock length, and the total
+    stock length (at least the total stock count, as lengths are positive)
+    also bounds each individual stock length.
+    """
+    total_stock_length = sum(stock.length * stock.quantity for stock in problem.stocks)
+    largest_demand_quantity = max(
+        (demand.quantity for demand in problem.demands), default=0,
+    )
+    return max(total_stock_length, largest_demand_quantity)
+
+
 def _termination_reason(
     backend_status: BackendStatus,
     options: BackendOptions,
@@ -527,6 +551,17 @@ class ExactEnumeratedBackend:
         problem: Problem,
         options: BackendOptions,
     ) -> BackendSupport:
+        largest_model_value = _largest_model_value(problem)
+        if largest_model_value > MAX_EXACT_MODEL_VALUE:
+            return BackendSupport(
+                supported=False,
+                reason=(
+                    "The model needs the integer value "
+                    f"{largest_model_value}, but the CBC model file only "
+                    f"represents integers up to {MAX_EXACT_MODEL_VALUE} "
+                    "exactly."
+                ),
+            )
         return BackendSupport(supported=True)
 
     def solve(

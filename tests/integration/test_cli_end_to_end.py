@@ -4,9 +4,14 @@ Every test here runs the ``saw`` console script that ``pip install`` placed
 next to the running interpreter as a separate operating-system process. It
 feeds a problem through a real file or real standard input and inspects only
 what an external caller can see: the raw standard-output bytes, the raw
-standard-error bytes, and the exit code. Nothing is monkeypatched, so these
-tests cover the entry-point wiring, stream encoding, and process exit status
-that the in-process tests in ``tests/unit/test_cli*.py`` cannot reach.
+standard-error bytes, and the exit code. These tests cover the entry-point
+wiring, stream encoding, and process exit status that the in-process tests
+in ``tests/unit/test_cli*.py`` cannot reach.
+
+Nothing in the test process is monkeypatched. Outcomes that no real problem
+triggers on demand (an unavailable CBC, a corrupted candidate, an interrupt)
+are injected into the child process by ``fault_injection/sitecustomize.py``,
+which replaces only the backend underneath the real ``solve()``.
 
 For every run, standard output must be exactly one newline-terminated JSON
 document that validates against the published version 1 schema, and the exit
@@ -21,6 +26,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import sysconfig
 from collections import Counter
 from dataclasses import dataclass
@@ -34,6 +40,10 @@ REPOSITORY_ROOT = Path(__file__).parents[2]
 SCHEMA_DIRECTORY = REPOSITORY_ROOT / "schemas"
 DOCUMENTED_PROBLEM = REPOSITORY_ROOT / "examples" / "json" / "problem-v1-valid.json"
 DOCUMENTED_SOLUTION = REPOSITORY_ROOT / "examples" / "json" / "solution-v1-optimal.json"
+# Put on PYTHONPATH to inject a named fault into the installed command; see
+# fault_injection/sitecustomize.py.
+FAULT_INJECTION_DIRECTORY = Path(__file__).parent / "fault_injection"
+TRACEBACK_HEADER = "Traceback (most recent call last)"
 
 # docs/cli.md, "Exit codes".
 SOLUTION_STATUS_EXIT_CODES = {
@@ -115,7 +125,7 @@ def saw_executable() -> str:
     pytest.fail(
         "The 'saw' console script is not installed for this interpreter "
         f"(searched {directories}); install the package with "
-        "'python -m pip install -e .' before running the integration tests."
+        "'python -m pip install .' before running the integration tests."
     )
 
 
@@ -131,6 +141,44 @@ def validators() -> dict[str, Draft202012Validator]:
     return result
 
 
+def _process_environment(fault: str | None) -> dict[str, str]:
+    """The child's environment: no UTF-8 overrides, and an optional fault.
+
+    ``PYTHONUTF8``/``PYTHONIOENCODING`` are removed so a locale-dependent
+    stream encoding bug cannot be hidden by the test runner's settings.
+    """
+    env = {
+        key: value for key, value in os.environ.items()
+        if key not in ("PYTHONUTF8", "PYTHONIOENCODING", "SAW_TEST_FAULT")
+    }
+    if fault is not None:
+        env["SAW_TEST_FAULT"] = fault
+        env["PYTHONPATH"] = os.pathsep.join(
+            filter(None, [str(FAULT_INJECTION_DIRECTORY), env.get("PYTHONPATH")])
+        )
+    return env
+
+
+@pytest.fixture
+def start_saw(saw_executable, tmp_path):
+    """Start ``saw`` as a raw process, for runs outside the one-document rule.
+
+    Interrupts and broken standard streams are the documented cases where
+    standard output need not hold a document, so their tests inspect the
+    process directly instead of going through ``run_saw``.
+    """
+
+    def start(argv: list[str], *, fault: str | None = None, **streams) -> subprocess.Popen:
+        return subprocess.Popen(
+            [saw_executable, *argv],
+            cwd=tmp_path,
+            env=_process_environment(fault),
+            **streams,
+        )
+
+    return start
+
+
 @pytest.fixture
 def run_saw(saw_executable, validators, tmp_path):
     """Run ``saw`` as an external process and check the stream contract.
@@ -138,10 +186,18 @@ def run_saw(saw_executable, validators, tmp_path):
     Every run, whatever its outcome, must satisfy docs/cli.md: standard
     output is exactly one schema-valid, newline-terminated JSON document; the
     exit code is the one documented for that document; and no traceback
-    appears on either stream (none of these runs pass ``--traceback``).
+    appears on either stream unless the test passes ``--traceback`` and says
+    one is expected. ``fault`` names an outcome injected by
+    fault_injection/sitecustomize.py.
     """
 
-    def run(argv: list[str], *, stdin: bytes = b"") -> CliRun:
+    def run(
+        argv: list[str],
+        *,
+        stdin: bytes = b"",
+        fault: str | None = None,
+        expect_traceback: bool = False,
+    ) -> CliRun:
         completed = subprocess.run(
             [saw_executable, *argv],
             input=stdin,
@@ -149,6 +205,7 @@ def run_saw(saw_executable, validators, tmp_path):
             # A neutral working directory: the command must not depend on
             # being run from the repository checkout.
             cwd=tmp_path,
+            env=_process_environment(fault),
             timeout=120,
             check=False,
         )
@@ -163,13 +220,15 @@ def run_saw(saw_executable, validators, tmp_path):
             expected_exit_code = ERROR_CODE_EXIT_CODES[document["error"]["code"]]
             # Every error envelope is mirrored as a one-line human
             # diagnostic on standard error.
-            assert stderr.startswith("saw: error: "), stderr
+            assert any(
+                line.startswith("saw: error: ") for line in stderr.splitlines()
+            ), stderr
         else:
             expected_exit_code = SOLUTION_STATUS_EXIT_CODES[document["solution_status"]]
         assert completed.returncode == expected_exit_code, (document, stderr)
 
-        assert "Traceback" not in stdout
-        assert "Traceback" not in stderr, stderr
+        assert TRACEBACK_HEADER not in stdout
+        assert (TRACEBACK_HEADER in stderr) is expect_traceback, stderr
         return CliRun(completed.returncode, document, stderr)
 
     return run
@@ -180,12 +239,12 @@ def _parse_exactly_one_document(stdout: str) -> dict:
 
     ``json.loads`` alone would also accept surrounding whitespace, so the
     document is decoded with ``raw_decode`` and whatever follows it must be
-    exactly the terminating newline -- no second document, no log line.
-    Standard output is a text stream, so on Windows that newline is
-    ``\\r\\n``.
+    exactly the terminating newline -- no second document, no log line. The
+    newline is ``\\n`` on every platform, including Windows, so the output
+    bytes do not depend on where saw runs.
     """
     document, end = json.JSONDecoder().raw_decode(stdout)
-    assert stdout[end:] in ("\n", "\r\n"), repr(stdout[end:])
+    assert stdout[end:] == "\n", repr(stdout[end:])
     assert isinstance(document, dict)
     return document
 
@@ -377,16 +436,21 @@ def _problem_bytes(*, format_version: int = 1, stock_length: int = 10) -> bytes:
         (["solve", "--time-limit", "soon"], b"", "invalid_cli_usage"),
         (["solve", "--pattern-limit", "0"], b"", "invalid_cli_usage"),
         (["solve", "--backend", "no-such-backend"], b"", "invalid_cli_usage"),
+        ([], b"", "invalid_cli_usage"),
         (["solve"], b"", "invalid_json"),
         (["solve"], b"{", "invalid_json"),
         (["solve"], b'{"format_version": 1, "format_version": 1}', "invalid_json"),
         (["solve"], "﻿{}".encode("utf-16"), "invalid_json"),
+        (["solve"], b'{"format_version": 1, "x": "\xe9"}', "invalid_json"),
+        (["solve"], b'{"format_version": NaN}', "invalid_json"),
+        (["solve"], b"[" * 100_000 + b"]" * 100_000, "invalid_json"),
         (["solve"], _problem_bytes(format_version=2), "unsupported_format_version"),
         (["solve"], _problem_bytes(stock_length=-10), "invalid_problem"),
     ],
     ids=[
         "unknown-option", "non-numeric-limit", "rejected-limit", "unknown-backend",
-        "empty", "malformed", "duplicate-member", "utf-16", "format-version-2",
+        "missing-command", "empty", "malformed", "duplicate-member", "utf-16",
+        "non-utf-8", "nan-constant", "deep-nesting", "format-version-2",
         "negative-length",
     ],
 )
@@ -402,13 +466,14 @@ def test_invalid_invocation_or_input_exits_2_with_an_error_envelope(
 
     assert run.exit_code == 2
     assert run.document["error"]["code"] == expected_code
-    # Exactly the envelope message, mirrored once; no traceback for exit 2.
-    assert run.stderr.splitlines() == [
-        f"saw: error: {run.document['error']['message']}"
-    ]
+    # The envelope message is mirrored once as a one-line diagnostic; no
+    # traceback for exit 2.
+    [diagnostic] = run.stderr.splitlines()
+    assert diagnostic.startswith("saw: error: ")
+    assert run.document["error"]["message"] in diagnostic
 
 
-def test_unreadable_input_file_exits_74_without_leaking_the_path(
+def test_missing_input_file_exits_74_without_leaking_the_path(
     run_saw, tmp_path,
 ) -> None:
     missing = tmp_path / "missing-problem.json"
@@ -475,3 +540,203 @@ def test_disabling_a_limit_with_none_restores_the_verified_optimum(run_saw) -> N
     _assert_independently_verified(
         json.loads(DOCUMENTED_PROBLEM.read_text(encoding="utf-8")), unlimited.document,
     )
+
+
+# --- the rest of the documented table, through the real process -----------
+#
+# These outcomes cannot be produced on demand by a real problem, so the
+# backend underneath the real solve() is swapped by
+# fault_injection/sitecustomize.py. Everything above solve() -- the console
+# script, argument parsing, streams, and exit status -- is the real thing.
+
+
+def _documented_problem() -> dict:
+    return json.loads(DOCUMENTED_PROBLEM.read_text(encoding="utf-8"))
+
+
+def test_a_verified_feasible_plan_exits_0(run_saw) -> None:
+    run = run_saw(["solve", str(DOCUMENTED_PROBLEM)], fault="feasible")
+
+    assert run.exit_code == 0
+    assert run.document["solution_status"] == "feasible"
+    _assert_independently_verified(_documented_problem(), run.document)
+
+
+def test_a_limit_with_a_verified_incumbent_exits_4_with_its_plan(run_saw) -> None:
+    run = run_saw(["solve", str(DOCUMENTED_PROBLEM)], fault="limit-with-incumbent")
+
+    assert run.exit_code == 4
+    assert run.document["solution_status"] == "limit"
+    _assert_independently_verified(_documented_problem(), run.document)
+
+
+def test_a_problem_beyond_the_exact_backends_range_exits_5(run_saw) -> None:
+    # No fault: the real exact backend declines lengths its CBC model file
+    # cannot represent exactly (docs/limitations.md).
+    run = run_saw(
+        ["solve", "--numeric-magnitude-limit", "none"],
+        stdin=_problem_bytes(stock_length=10**13),
+    )
+
+    assert run.exit_code == 5
+    assert run.document["solution_status"] == "unsupported"
+    assert run.document["diagnostics"]["termination_reason"] == "unsupported_problem"
+    assert "cut_patterns" not in run.document
+
+
+@pytest.mark.parametrize("fault", ["cbc-missing", "cbc-lost-mid-solve"])
+def test_an_unavailable_backend_exits_6(run_saw, fault) -> None:
+    run = run_saw(["solve", str(DOCUMENTED_PROBLEM)], fault=fault)
+
+    assert run.exit_code == 6
+    assert run.document["error"]["code"] == "backend_unavailable"
+
+
+def test_invalid_input_wins_over_an_unavailable_backend(run_saw) -> None:
+    run = run_saw(["solve"], stdin=b'{"format_version": 1}', fault="cbc-missing")
+
+    assert run.exit_code == 2
+    assert run.document["error"]["code"] == "invalid_problem"
+
+
+@pytest.mark.parametrize(
+    ("fault", "expected"),
+    [
+        ("backend-failure", {"solution_status": "error"}),
+        ("corrupted-candidate", {"error": "internal_verification_error"}),
+        ("internal-exception", {"error": "internal_error"}),
+    ],
+)
+def test_internal_failures_exit_70_without_a_plan(run_saw, fault, expected) -> None:
+    run = run_saw(["solve", str(DOCUMENTED_PROBLEM)], fault=fault)
+
+    assert run.exit_code == 70
+    if "error" in expected:
+        assert run.document["error"]["code"] == expected["error"]
+    else:
+        assert run.document["solution_status"] == expected["solution_status"]
+    for key in ("cut_patterns", "objective_value", "verification_report"):
+        assert key not in run.document
+
+
+def test_traceback_flag_adds_the_traceback_to_stderr_only(run_saw) -> None:
+    run = run_saw(
+        ["solve", "--traceback", str(DOCUMENTED_PROBLEM)],
+        fault="internal-exception", expect_traceback=True,
+    )
+
+    assert run.exit_code == 70
+    assert "RuntimeError: injected fault" in run.stderr
+    assert "injected fault" not in json.dumps(run.document)
+
+
+def test_a_stray_backend_print_goes_to_stderr_not_the_document(run_saw) -> None:
+    run = run_saw(["solve", str(DOCUMENTED_PROBLEM)], fault="stray-print")
+
+    assert run.exit_code == 0
+    assert run.document["solution_status"] == "optimal"
+    assert "stray backend log line" in run.stderr
+
+
+def test_a_directory_input_exits_74(run_saw, tmp_path) -> None:
+    run = run_saw(["solve", str(tmp_path)])
+
+    assert run.exit_code == 74
+    assert run.document["error"]["code"] == "input_read_error"
+
+
+def test_a_closed_standard_input_exits_74(saw_executable, tmp_path) -> None:
+    # A parent with no standard input at all: the child inherits a closed
+    # descriptor 0, which Python exposes as sys.stdin being None.
+    parent = (
+        "import os, subprocess, sys; os.close(0); "
+        "sys.exit(subprocess.run(sys.argv[1:]).returncode)"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", parent, saw_executable, "solve", "-"],
+        capture_output=True, cwd=tmp_path, env=_process_environment(None),
+        timeout=120, check=False,
+    )
+
+    assert completed.returncode == 74, completed.stderr
+    document = _parse_exactly_one_document(completed.stdout.decode("utf-8"))
+    assert document["error"]["code"] == "input_read_error"
+
+
+def test_a_non_ascii_path_is_named_intact_on_stderr(run_saw, tmp_path) -> None:
+    run = run_saw(["solve", str(tmp_path / "čelik-šipke.json")])
+
+    assert run.exit_code == 74
+    # Standard error is UTF-8 regardless of the console code page.
+    assert "čelik-šipke.json" in run.stderr
+
+
+# --- documented cases without a guaranteed document -----------------------
+
+
+def _closed_pipe_write_end() -> int:
+    """A pipe whose reader has already gone, as when ``| head -c 0`` exits."""
+    read_end, write_end = os.pipe()
+    os.close(read_end)
+    return write_end
+
+
+def test_an_unwritable_standard_output_exits_74_without_shutdown_noise(
+    start_saw,
+) -> None:
+    write_end = _closed_pipe_write_end()
+    try:
+        process = start_saw(
+            ["solve", str(DOCUMENTED_PROBLEM)],
+            stdin=subprocess.DEVNULL, stdout=write_end, stderr=subprocess.PIPE,
+        )
+    finally:
+        os.close(write_end)
+    _, stderr = process.communicate(timeout=120)
+
+    assert process.returncode == 74, stderr
+    assert b"could not write output" in stderr
+    assert b"Exception ignored" not in stderr
+    assert TRACEBACK_HEADER.encode() not in stderr
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_exit_code"),
+    [
+        (["solve", str(DOCUMENTED_PROBLEM)], 0),
+        (["solve", "--no-such-option"], 2),
+        (["solve", "missing-problem.json"], 74),
+    ],
+    ids=["success", "usage-error", "input-read-error"],
+)
+def test_an_unwritable_standard_error_never_changes_the_outcome(
+    start_saw, validators, argv, expected_exit_code,
+) -> None:
+    write_end = _closed_pipe_write_end()
+    try:
+        process = start_saw(
+            argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=write_end,
+        )
+    finally:
+        os.close(write_end)
+    stdout, _ = process.communicate(timeout=120)
+
+    # docs/cli.md: standard error is advisory. Without discarding its
+    # unflushed diagnostic, shutdown would force exit code 120.
+    assert process.returncode == expected_exit_code
+    document = _parse_exactly_one_document(stdout.decode("utf-8"))
+    validators["error" if "error" in document else "solution"].validate(document)
+
+
+def test_an_interrupt_exits_130_with_a_one_line_note(start_saw) -> None:
+    process = start_saw(
+        ["solve", str(DOCUMENTED_PROBLEM)], fault="keyboard-interrupt",
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    stdout, stderr = process.communicate(timeout=120)
+
+    # docs/cli.md, "Interruption": outside the outcome contract, so no
+    # document -- and no traceback for the caller's own Ctrl+C.
+    assert process.returncode == 130
+    assert stdout == b""
+    assert stderr.decode("utf-8").splitlines() == ["saw: interrupted"]

@@ -1,23 +1,65 @@
-# Command-line outcome contract
+# Command-line interface
 
-This document defines the stable outcome, stream, and exit-code contract for
-the Saw JSON command-line interface before its implementation. Argument names,
-input-source selection, and optional human-oriented commands such as `--help`
-are outside this contract.
+Installing the package (`python -m pip install .`) provides a `saw` command;
+`python -m saw` is equivalent. This document defines its stable outcome,
+stream, and exit-code contract. The usage section below describes the current
+arguments; argument names, input-source selection, and human-oriented output
+such as `--help` and `--version` are outside the stable contract.
+
+## Usage
+
+```shell
+saw solve problem.json          # read a version 1 problem from a file
+saw solve - < problem.json      # read it from standard input
+saw solve < problem.json        # same as '-'
+```
+
+| Option | Meaning |
+| --- | --- |
+| `PATH` | Problem file, or `-` (the default) for standard input. |
+| `--backend ID` | Backend to solve with (default `exact_enumerated`). |
+| `--time-limit SECONDS\|none` | End-to-end wall-clock budget. |
+| `--pattern-limit COUNT\|none` | Maximum number of enumerated cut patterns. |
+| `--problem-size-limit COUNT\|none` | Maximum combined stock and demand record count. |
+| `--numeric-magnitude-limit VALUE\|none` | Maximum stock/demand length or quantity. |
+| `--traceback` | On an internal or backend failure (exit codes `6` and `70`), also write the full Python traceback to standard error. Off by default. |
+| `saw --version`, `saw --help`, `saw solve --help` | Human-oriented; they print text, not JSON. |
+
+Defaults for the limit options are the `SolveOptions` defaults in
+[resource-limits.md](resource-limits.md). When the input is standard input
+and it is an interactive terminal, `saw` writes a one-line hint to standard
+error before waiting for the problem.
+
+For example, from the repository root:
+
+```shell
+saw solve examples/json/problem-v1-valid.json
+```
+
+writes the plan in [solution-v1-optimal.json](../examples/json/solution-v1-optimal.json)
+(as one line, with run-specific diagnostics) and exits `0`, and
+
+```shell
+saw solve --pattern-limit 1 examples/json/problem-v1-valid.json
+```
+
+writes a `limit` solution envelope without a plan and exits `4`.
 
 ## Standard streams
 
 For every solve invocation, standard output is a machine-readable channel. On
 every path where standard output remains writable, it contains exactly one
-complete JSON document followed by a newline:
+complete JSON document followed by a single line feed (`\n`, also on
+Windows):
 
 - a version 1 solution envelope for a completed solve outcome; or
 - a version 1 error envelope for a failure which prevented a normal outcome.
 
 Progress, warnings, tracebacks, solver logs, and other human diagnostics must
 never be written to standard output. They may be written to standard error.
-Redirecting or suppressing standard error therefore cannot change the JSON
-document on standard output. While solving, the CLI redirects Python-level
+Redirecting, suppressing, or closing standard error therefore cannot change
+the JSON document on standard output or the exit code. Diagnostics are
+written as UTF-8, independent of the console code page. While solving, the CLI redirects Python-level
 standard output to standard error, so a stray `print()` or solver log from a
 backend or third-party library cannot corrupt the JSON document.
 
@@ -139,3 +181,11 @@ is an internal failure and maps to `70`.
 This precedence prevents environment details from changing how the same
 invalid request is classified and prevents internal failures from being
 misreported as expected solve outcomes.
+
+## Interruption
+
+An interrupt (Ctrl+C, `SIGINT`) while saw is working is the caller's own
+request, not a Saw outcome. Like termination by any other signal it is outside
+the outcome contract: saw writes `saw: interrupted` to standard error, writes
+no JSON document, and exits with `130`, the shell convention for `SIGINT`. No
+traceback is printed.

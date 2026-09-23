@@ -28,19 +28,26 @@ It does not re-run verification; it raises
 be represented without contradicting its own declared status.
 
 This module knows nothing about a command-line interface, standard streams,
-exit codes, or input sources. It only turns JSON text that has already been
-read into a :class:`~saw.models.Problem`, or a :class:`~saw.models.Solution`
-into JSON text, raising :class:`~saw.exceptions.SerializationError` when it
-cannot.
+exit codes, or input sources. It only turns JSON text or bytes that have
+already been read into a :class:`~saw.models.Problem`, a
+:class:`~saw.models.Solution` into JSON text, or an error code and message
+into a version 1 error envelope, raising
+:class:`~saw.exceptions.SerializationError` when it cannot.
 """
 
 from __future__ import annotations
 
+import codecs
 import json
 import math
 from collections.abc import Callable, Iterable
 
-from saw.exceptions import SerializationError, SerializationErrorCode, ValidationError
+from saw.exceptions import (
+    ErrorCode,
+    SerializationError,
+    SerializationErrorCode,
+    ValidationError,
+)
 from saw.models import (
     CutPattern,
     Demand,
@@ -55,7 +62,13 @@ from saw.models import (
 )
 from saw.validation import validate_problem
 
-__all__ = ("SUPPORTED_FORMAT_VERSION", "json_from_solution", "problem_from_json")
+__all__ = (
+    "SUPPORTED_FORMAT_VERSION",
+    "json_from_error",
+    "json_from_solution",
+    "problem_from_bytes",
+    "problem_from_json",
+)
 
 #: The only ``format_version`` value this module accepts.
 SUPPORTED_FORMAT_VERSION = 1
@@ -84,6 +97,66 @@ class _JsonSyntaxError(ValueError):
     """A JSON syntax problem this module rejects beyond RFC 8259 parsing."""
 
 
+def problem_from_bytes(data: bytes) -> Problem:
+    """Decode and parse a version 1 JSON problem read as raw bytes.
+
+    The bytes must be UTF-8 (RFC 8259), independent of any locale or console
+    encoding. A single leading UTF-8 byte order mark is ignored. Input that
+    is empty or whitespace-only, is not UTF-8, or starts with a UTF-16 or
+    UTF-32 byte order mark was read successfully but is not one JSON
+    document, so it is reported as ``INVALID_JSON``.
+
+    Raises:
+        SerializationError: for any reason listed above, or any reason
+            :func:`problem_from_json` raises for the decoded text.
+    """
+    return problem_from_json(_decode_problem_bytes(data))
+
+
+def _decode_problem_bytes(data: bytes) -> str:
+    # UTF-32-LE's BOM starts with UTF-16-LE's, so these two prefixes also
+    # catch both UTF-32 byte orders.
+    if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        raise SerializationError(
+            "Input starts with a UTF-16 or UTF-32 byte order mark; JSON input "
+            "must be UTF-8.",
+            code=SerializationErrorCode.INVALID_JSON,
+        )
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise SerializationError(
+            f"Input is not valid UTF-8: byte 0x{data[error.start]:02x} at "
+            f"offset {error.start} cannot be decoded.",
+            code=SerializationErrorCode.INVALID_JSON,
+        ) from None
+    text = text.removeprefix("﻿")
+    # Only RFC 8259 insignificant whitespace counts as empty; anything else
+    # is left for the JSON parser to report.
+    if not text.strip(" \t\r\n"):
+        raise SerializationError(
+            "Input is empty; expected exactly one JSON problem document.",
+            code=SerializationErrorCode.INVALID_JSON,
+        )
+    return text
+
+
+def json_from_error(code: ErrorCode, message: str) -> str:
+    """Serialize a version 1 error envelope as JSON text.
+
+    ``message`` is for people and must not contain host paths, exception
+    class names, or tracebacks (docs/formats.md, "Envelope and required
+    fields"); those belong in a human diagnostic instead.
+    """
+    return json.dumps(
+        {
+            "format_version": SUPPORTED_FORMAT_VERSION,
+            "error": {"code": ErrorCode(code).value, "message": message},
+        },
+        allow_nan=False,
+    )
+
+
 def problem_from_json(text: str) -> Problem:
     """Parse a version 1 JSON problem request into a :class:`Problem`.
 
@@ -103,6 +176,13 @@ def problem_from_json(text: str) -> Problem:
             other than ``1``; or if the assembled problem fails semantic
             validation performed by :func:`saw.validation.validate_problem`.
     """
+    if not isinstance(text, str):
+        # json.loads would silently accept bytes and guess their encoding;
+        # problem_from_bytes applies the documented UTF-8 rules instead.
+        raise TypeError(
+            f"problem_from_json() expects str, not {type(text).__name__}; "
+            "use problem_from_bytes() for undecoded input."
+        )
     payload = _load_json(text)
     _require_object(payload, "problem")
     _require_exact_members(payload, _PROBLEM_MEMBERS, "problem")

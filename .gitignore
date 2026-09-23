@@ -35,3 +35,6 @@ Thumbs.db
 
 linear_api.txt
 *.csv
+
+# Stray local CLI output
+/result.json

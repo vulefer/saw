@@ -918,3 +918,75 @@ def test_a_non_finite_elapsed_time_is_rejected(non_finite: float) -> None:
 
     assert excinfo.value.code is SerializationErrorCode.SCHEMA_VIOLATION
     assert excinfo.value.field == "elapsed_time"
+
+
+# --- problem_from_bytes: the byte-level decoding rules ----------------------
+
+
+def test_bytes_input_parses_like_the_equivalent_text() -> None:
+    raw = VALID_EXAMPLE_PATH.read_bytes()
+
+    assert saw.problem_from_bytes(raw) == problem_from_json(raw.decode("utf-8"))
+
+
+def test_bytes_input_ignores_one_leading_utf8_byte_order_mark() -> None:
+    raw = VALID_EXAMPLE_PATH.read_bytes()
+
+    assert saw.problem_from_bytes(b"\xef\xbb\xbf" + raw) == saw.problem_from_bytes(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"",
+        b" \t\r\n",
+        b"\xef\xbb\xbf",
+        MINIMAL_VALID_JSON.encode("utf-16"),
+        MINIMAL_VALID_JSON.encode("utf-32"),
+        b'{"format_version": 1, "stocks": [], "demands": [], "x": "\xe9"}',
+    ],
+    ids=["empty", "whitespace", "bom-only", "utf-16", "utf-32", "latin-1"],
+)
+def test_bytes_that_are_not_one_utf8_json_text_are_invalid_json(raw: bytes) -> None:
+    with pytest.raises(SerializationError) as caught:
+        saw.problem_from_bytes(raw)
+
+    assert caught.value.code is SerializationErrorCode.INVALID_JSON
+    assert caught.value.error_code is saw.ErrorCode.INVALID_JSON
+
+
+def test_problem_from_json_rejects_undecoded_bytes() -> None:
+    with pytest.raises(TypeError, match="problem_from_bytes"):
+        problem_from_json(MINIMAL_VALID_JSON.encode("utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("code", "error_code"),
+    [
+        (SerializationErrorCode.INVALID_JSON, "invalid_json"),
+        (SerializationErrorCode.UNSUPPORTED_FORMAT_VERSION, "unsupported_format_version"),
+        (SerializationErrorCode.SCHEMA_VIOLATION, "invalid_problem"),
+        (SerializationErrorCode.SEMANTIC_VALIDATION, "invalid_problem"),
+    ],
+)
+def test_every_serialization_error_has_an_envelope_code(
+    code: SerializationErrorCode, error_code: str,
+) -> None:
+    assert SerializationError("x", code=code).error_code == error_code
+
+
+# --- json_from_error: the version 1 error envelope ---------------------------
+
+
+def test_error_envelope_has_exactly_the_documented_members() -> None:
+    document = json.loads(saw.json_from_error(saw.ErrorCode.INVALID_JSON, "Bad input."))
+
+    assert document == {
+        "format_version": 1,
+        "error": {"code": "invalid_json", "message": "Bad input."},
+    }
+
+
+def test_error_envelope_rejects_an_undocumented_code() -> None:
+    with pytest.raises(ValueError):
+        saw.json_from_error("no_such_code", "message")

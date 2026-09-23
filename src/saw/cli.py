@@ -2,8 +2,9 @@
 
 This module implements the ``saw`` console script: a thin adapter between
 process argv/stdin/stdout/stderr and the public :mod:`saw` API
-(:func:`saw.serialization.problem_from_json`, :func:`saw.solve.solve`,
-:func:`saw.serialization.json_from_solution`). It owns argument names, input
+(:func:`saw.serialization.problem_from_bytes`, :func:`saw.solve.solve`,
+:func:`saw.serialization.json_from_solution`,
+:func:`saw.serialization.json_from_error`). It owns argument names, input
 selection, and human-oriented ``--help``/``--version`` output -- all
 explicitly left open by ``docs/cli.md`` -- and implements that document's
 standard-stream, exit-code, and outcome-precedence contract exactly.
@@ -25,7 +26,6 @@ uses, so every plan the CLI emits has passed the same verification gate as
 from __future__ import annotations
 
 import argparse
-import codecs
 import contextlib
 import io
 import json
@@ -39,12 +39,12 @@ from typing import IO, Callable
 
 from saw.exceptions import (
     BackendUnavailableError,
+    ErrorCode,
     InternalVerificationError,
     SerializationError,
-    SerializationErrorCode,
 )
 from saw.models import SolutionStatus
-from saw.serialization import json_from_solution, problem_from_json
+from saw.serialization import json_from_error, json_from_solution, problem_from_bytes
 from saw.solve import InvalidSolveOptionsError, SolveOptions, solve
 
 __all__ = ("build_parser", "main")
@@ -66,15 +66,26 @@ _SOLUTION_STATUS_EXIT_CODES: dict[SolutionStatus, int] = {
 # actual v0.2.0 defaults for help text and argparse defaults below.
 _DEFAULT_OPTIONS = SolveOptions()
 
-# docs/formats.md, "Error codes": a SerializationError raised while reading a
-# problem is always a readable-but-invalid document, never a CLI usage or
-# I/O problem, so it always maps to exit code 2.
-_SERIALIZATION_ERROR_CODES: dict[SerializationErrorCode, str] = {
-    SerializationErrorCode.INVALID_JSON: "invalid_json",
-    SerializationErrorCode.UNSUPPORTED_FORMAT_VERSION: "unsupported_format_version",
-    SerializationErrorCode.SCHEMA_VIOLATION: "invalid_problem",
-    SerializationErrorCode.SEMANTIC_VALIDATION: "invalid_problem",
+# docs/cli.md, "Exit codes". Every error envelope's exit code is derived from
+# its code here, so the two can never disagree.
+_ERROR_CODE_EXIT_CODES: dict[ErrorCode, int] = {
+    ErrorCode.INVALID_CLI_USAGE: 2,
+    ErrorCode.INVALID_JSON: 2,
+    ErrorCode.UNSUPPORTED_FORMAT_VERSION: 2,
+    ErrorCode.INVALID_PROBLEM: 2,
+    ErrorCode.BACKEND_UNAVAILABLE: 6,
+    ErrorCode.INTERNAL_ERROR: 70,
+    ErrorCode.INTERNAL_VERIFICATION_ERROR: 70,
+    ErrorCode.INPUT_READ_ERROR: 74,
+    ErrorCode.OUTPUT_WRITE_ERROR: 74,
 }
+
+# docs/cli.md, "Interruption": 128 + SIGINT, the shell convention. Outside
+# the outcome contract, so no document is written for it.
+_INTERRUPTED_EXIT_CODE = 130
+
+# Longest argument text echoed back in a usage error message.
+_MAX_ECHOED_ARGUMENT_LENGTH = 40
 
 
 class _CliUsageError(Exception):
@@ -93,10 +104,6 @@ class _InputReadError(Exception):
     def __init__(self, message: str, detail: str) -> None:
         super().__init__(message)
         self.detail = detail
-
-
-class _InputDecodeError(Exception):
-    """Input was read completely but is not one UTF-8 JSON text (exit 2)."""
 
 
 class _ArgumentParser(argparse.ArgumentParser):
@@ -136,8 +143,16 @@ def _optional_value_type(
         try:
             return convert(raw)
         except ValueError as error:
+            shown = raw
+            if len(shown) > _MAX_ECHOED_ARGUMENT_LENGTH:
+                shown = shown[: _MAX_ECHOED_ARGUMENT_LENGTH - 3] + "..."
+            if raw.strip().lstrip("+-").isdigit():
+                # Only reachable past Python's integer string-length limit.
+                reason = "the number has too many digits"
+            else:
+                reason = f"expected {expected} or 'none'"
             raise argparse.ArgumentTypeError(
-                f"invalid value {raw!r}: expected {expected} or 'none'"
+                f"invalid value {shown!r}: {reason}"
             ) from error
 
     return convert_or_none
@@ -315,6 +330,41 @@ def _add_solve_subcommand(subparsers: argparse._SubParsersAction) -> None:
     parser.set_defaults(handler=_run_solve)
 
 
+def _is_process_stream(stream: object) -> bool:
+    """Whether ``stream`` is the process's own stdout or stderr.
+
+    Only these may be reconfigured or have their file descriptor redirected;
+    streams injected by a caller (tests) are never touched.
+    """
+    return stream is not None and any(
+        stream is candidate
+        for candidate in (sys.stdout, sys.__stdout__, sys.stderr, sys.__stderr__)
+    )
+
+
+def _discard_further_writes(stream: IO[str] | None) -> None:
+    """Point a failed process stream's file descriptor at the null device.
+
+    After a failed write, text may still sit in the stream's buffer; the
+    interpreter retries flushing it at shutdown, fails again on the broken
+    pipe, prints "Exception ignored ... BrokenPipeError", and forces exit
+    code 120 instead of the documented one. Redirecting the descriptor makes
+    that final flush succeed silently. Applies to standard output and
+    standard error alike, since a closed stderr must never change the exit
+    code either (docs/cli.md, "Standard streams").
+    """
+    if not _is_process_stream(stream):
+        return
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(devnull, stream.fileno())
+        finally:
+            os.close(devnull)
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
 def _print_diagnostic(stderr: IO[str] | None, text: str) -> None:
     """Best-effort human diagnostic on standard error.
 
@@ -327,7 +377,7 @@ def _print_diagnostic(stderr: IO[str] | None, text: str) -> None:
         print(text, file=stderr)
         stderr.flush()
     except (OSError, ValueError):
-        pass
+        _discard_further_writes(stderr)
 
 
 def _print_traceback(stderr: IO[str] | None) -> None:
@@ -337,7 +387,7 @@ def _print_traceback(stderr: IO[str] | None) -> None:
         traceback.print_exc(file=stderr)
         stderr.flush()
     except (OSError, ValueError):
-        pass
+        _discard_further_writes(stderr)
 
 
 class _StderrSink(io.TextIOBase):
@@ -363,7 +413,7 @@ class _StderrSink(io.TextIOBase):
             try:
                 self._stderr.write(text)
             except (OSError, ValueError, AttributeError):
-                pass
+                _discard_further_writes(self._stderr)
         return len(text)
 
     def flush(self) -> None:
@@ -371,29 +421,23 @@ class _StderrSink(io.TextIOBase):
             try:
                 self._stderr.flush()
             except (OSError, ValueError, AttributeError):
-                pass
+                _discard_further_writes(self._stderr)
 
 
-def _discard_further_stdout_writes(stdout: IO[str]) -> None:
-    """Point the process's standard output at the null device.
+def _configure_process_streams(stdout: IO[str], stderr: IO[str]) -> None:
+    """Make the process streams' bytes independent of platform and locale.
 
-    After a failed write, text may still sit in the stdout buffer; the
-    interpreter retries flushing it at shutdown, fails again on the broken
-    pipe, prints "Exception ignored ... BrokenPipeError" to stderr, and
-    forces exit code 120 instead of 74. Redirecting the file descriptor
-    makes that final flush succeed silently. Only done for the real process
-    stream, never for injected streams.
+    Standard output gets ``\\n`` line endings on every platform, so the JSON
+    document is byte-for-byte identical on Windows. Standard error is written
+    as UTF-8, matching the input decoding rule, so a diagnostic naming a
+    non-ASCII path is not mangled by a legacy code page.
     """
-    if stdout is not sys.stdout and stdout is not sys.__stdout__:
-        return
-    try:
-        devnull = os.open(os.devnull, os.O_WRONLY)
-        try:
-            os.dup2(devnull, stdout.fileno())
-        finally:
-            os.close(devnull)
-    except (OSError, ValueError, AttributeError):
-        pass
+    if _is_process_stream(stdout):
+        with contextlib.suppress(AttributeError, OSError, ValueError):
+            stdout.reconfigure(newline="\n")
+    if _is_process_stream(stderr):
+        with contextlib.suppress(AttributeError, OSError, ValueError):
+            stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 
 def _write_document(stdout: IO[str], stderr: IO[str], text: str) -> int | None:
@@ -412,49 +456,50 @@ def _write_document(stdout: IO[str], stderr: IO[str], text: str) -> int | None:
         # OSError covers BrokenPipeError (EPIPE) and Windows' EINVAL for a
         # closed pipe; ValueError is a closed stream; AttributeError is a
         # missing stream (sys.stdout is None under pythonw).
-        _discard_further_stdout_writes(stdout)
+        _discard_further_writes(stdout)
         _print_diagnostic(stderr, f"{PROG}: could not write output: {error}")
-        return 74
+        return _ERROR_CODE_EXIT_CODES[ErrorCode.OUTPUT_WRITE_ERROR]
     return None
 
 
 def _emit_error(
     stdout: IO[str],
     stderr: IO[str],
-    code: str,
+    code: ErrorCode,
     message: str,
-    exit_code: int,
     *,
     diagnostic: str | None = None,
 ) -> int:
     """Write an error envelope to stdout and a human diagnostic to stderr.
 
-    ``diagnostic`` replaces ``message`` on stderr when it carries details
-    (host paths, exception classes) that must stay out of the closed
-    envelope (docs/formats.md, "Envelope and required fields").
+    Returns the exit code documented for ``code``. ``diagnostic`` replaces
+    ``message`` on stderr when it carries details (host paths, exception
+    classes) that must stay out of the closed envelope (docs/formats.md,
+    "Envelope and required fields").
     """
     _print_diagnostic(stderr, f"{PROG}: error: {diagnostic or message}")
-    document = json.dumps(
-        {"format_version": 1, "error": {"code": code, "message": message}},
-        allow_nan=False,
-    )
-    write_failure = _write_document(stdout, stderr, document)
-    return write_failure if write_failure is not None else exit_code
+    write_failure = _write_document(stdout, stderr, json_from_error(code, message))
+    return write_failure if write_failure is not None else _ERROR_CODE_EXIT_CODES[code]
 
 
-def _read_input(path: str, stdin: IO[str] | None) -> str:
-    """Read the whole problem text from ``path`` or, for ``-``, stdin.
+def _is_terminal(stream: IO[str]) -> bool:
+    try:
+        return stream.isatty()
+    except (AttributeError, OSError, ValueError):
+        return False
 
-    Input is read as bytes and decoded as strict UTF-8, so the result never
-    depends on the console code page or locale encoding (e.g. cp1252 on
-    Windows). A text-only stream without a ``.buffer`` (such as an injected
-    ``io.StringIO``) is read as already-decoded text.
+
+def _read_input(path: str, stdin: IO[str] | None) -> bytes:
+    """Read the whole problem from ``path`` or, for ``-``, stdin, as bytes.
+
+    Decoding is left to :func:`saw.serialization.problem_from_bytes`, so it
+    never depends on the console code page or locale encoding. A text-only
+    stream without a ``.buffer`` (such as an injected ``io.StringIO``) is
+    re-encoded as UTF-8.
 
     Raises:
         _InputReadError: the source could not be opened or read completely.
-        _InputDecodeError: the input is not a non-empty UTF-8 text.
     """
-    raw: bytes | str
     if path == "-":
         if stdin is None:
             raise _InputReadError(
@@ -463,47 +508,26 @@ def _read_input(path: str, stdin: IO[str] | None) -> str:
             )
         try:
             buffer = getattr(stdin, "buffer", None)
-            raw = buffer.read() if buffer is not None else stdin.read()
+            if buffer is not None:
+                return buffer.read()
+            # surrogatepass keeps undecodable text undecodable, so it is
+            # still reported as invalid_json rather than crashing here.
+            return stdin.read().encode("utf-8", "surrogatepass")
         except (OSError, ValueError) as error:
             raise _InputReadError(
                 "Could not read standard input.",
                 f"could not read standard input: {error}",
             ) from error
-    else:
-        try:
-            with open(path, "rb") as handle:
-                raw = handle.read()
-        except (OSError, ValueError) as error:
-            raise _InputReadError(
-                "Could not read the input file.",
-                # strerror avoids repeating the path OSError already embeds.
-                f"could not read input file '{path}': "
-                f"{getattr(error, 'strerror', None) or error}",
-            ) from error
 
-    text = _decode_input(raw) if isinstance(raw, bytes) else raw
-    text = text.removeprefix("﻿")
-    # Only RFC 8259 insignificant whitespace counts as empty; anything else
-    # is left for the JSON parser to report.
-    if not text.strip(" \t\r\n"):
-        raise _InputDecodeError(
-            "Input is empty; expected exactly one JSON problem document."
-        )
-    return text
-
-
-def _decode_input(raw: bytes) -> str:
-    if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
-        raise _InputDecodeError(
-            "Input starts with a UTF-16 or UTF-32 byte order mark; JSON input "
-            "must be UTF-8."
-        )
     try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise _InputDecodeError(
-            f"Input is not valid UTF-8: byte 0x{raw[error.start]:02x} at "
-            f"offset {error.start} cannot be decoded."
+        with open(path, "rb") as handle:
+            return handle.read()
+    except (OSError, ValueError) as error:
+        raise _InputReadError(
+            "Could not read the input file.",
+            # strerror avoids repeating the path OSError already embeds.
+            f"could not read input file '{path}': "
+            f"{getattr(error, 'strerror', None) or error}",
         ) from error
 
 
@@ -514,27 +538,28 @@ def _run_solve(
     stdout: IO[str],
     stderr: IO[str],
 ) -> int:
-    try:
-        problem_text = _read_input(args.input, stdin)
-    except _InputReadError as error:
-        return _emit_error(
-            stdout, stderr, "input_read_error", str(error), exit_code=74,
-            diagnostic=error.detail,
-        )
-    except _InputDecodeError as error:
-        # Read completely but not one UTF-8 JSON text: invalid content, not
-        # an I/O failure, so rerunning cannot help (exit 2, not 74).
-        return _emit_error(
-            stdout, stderr, "invalid_json", str(error), exit_code=2,
+    if args.input == "-" and stdin is not None and _is_terminal(stdin):
+        # Otherwise an interactive "saw solve" just waits, silently.
+        _print_diagnostic(
+            stderr,
+            f"{PROG}: reading the problem from standard input; end it with "
+            "Ctrl+D (Ctrl+Z then Enter on Windows), or pass a file path.",
         )
 
     try:
-        problem = problem_from_json(problem_text)
-    except SerializationError as error:
+        problem_bytes = _read_input(args.input, stdin)
+    except _InputReadError as error:
         return _emit_error(
-            stdout, stderr, _SERIALIZATION_ERROR_CODES[error.code],
-            str(error), exit_code=2,
+            stdout, stderr, ErrorCode.INPUT_READ_ERROR, str(error),
+            diagnostic=error.detail,
         )
+
+    try:
+        problem = problem_from_bytes(problem_bytes)
+    except SerializationError as error:
+        # Read completely but not a valid version 1 problem: invalid
+        # content, not an I/O failure, so rerunning cannot help (exit 2).
+        return _emit_error(stdout, stderr, error.error_code, str(error))
 
     options = _solve_options_from_args(args)
 
@@ -549,21 +574,16 @@ def _run_solve(
         # solve outcome. Any other ValueError is an internal failure and is
         # left to main()'s internal_error mapping (docs/cli.md, "Outcome
         # precedence").
-        return _emit_error(
-            stdout, stderr, "invalid_cli_usage", str(error), exit_code=2,
-        )
+        return _emit_error(stdout, stderr, ErrorCode.INVALID_CLI_USAGE, str(error))
     except BackendUnavailableError as error:
         if args.traceback:
             _print_traceback(stderr)
-        return _emit_error(
-            stdout, stderr, "backend_unavailable", str(error), exit_code=6,
-        )
+        return _emit_error(stdout, stderr, ErrorCode.BACKEND_UNAVAILABLE, str(error))
     except InternalVerificationError as error:
         if args.traceback:
             _print_traceback(stderr)
         return _emit_error(
-            stdout, stderr, "internal_verification_error", str(error),
-            exit_code=70,
+            stdout, stderr, ErrorCode.INTERNAL_VERIFICATION_ERROR, str(error),
         )
 
     try:
@@ -573,18 +593,15 @@ def _run_solve(
         # not a CLI usage or input problem.
         if args.traceback:
             _print_traceback(stderr)
-        return _emit_error(
-            stdout, stderr, "internal_error", str(error), exit_code=70,
-        )
+        return _emit_error(stdout, stderr, ErrorCode.INTERNAL_ERROR, str(error))
 
     # Resolved before writing: once the solution envelope is on standard
     # output, a failure here could only be reported with a second document.
     exit_code = _SOLUTION_STATUS_EXIT_CODES.get(solution.solution_status)
     if exit_code is None:
         return _emit_error(
-            stdout, stderr, "internal_error",
+            stdout, stderr, ErrorCode.INTERNAL_ERROR,
             "An internal error prevented a result; see standard error.",
-            exit_code=70,
             diagnostic=(
                 "internal error: solve() returned an unmapped solution "
                 f"status {solution.solution_status!r}"
@@ -610,24 +627,29 @@ def main(
     stdin = sys.stdin if stdin is None else stdin
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
+    _configure_process_streams(stdout, stderr)
 
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
     except _CliUsageError as error:
-        return _emit_error(
-            stdout, stderr, "invalid_cli_usage", str(error), exit_code=2,
-        )
+        return _emit_error(stdout, stderr, ErrorCode.INVALID_CLI_USAGE, str(error))
 
     handler = getattr(args, "handler", None)
     if handler is None:  # pragma: no cover - unreachable while "command" is required
         return _emit_error(
-            stdout, stderr, "invalid_cli_usage",
-            "No command given. Run 'saw --help' for usage.", exit_code=2,
+            stdout, stderr, ErrorCode.INVALID_CLI_USAGE,
+            "No command given. Run 'saw --help' for usage.",
         )
 
     try:
         return handler(args, stdin=stdin, stdout=stdout, stderr=stderr)
+    except KeyboardInterrupt:
+        # Ctrl+C is the caller's own request, not a saw failure: a one-line
+        # note instead of a traceback, and no document (docs/cli.md,
+        # "Interruption").
+        _print_diagnostic(stderr, f"{PROG}: interrupted")
+        return _INTERRUPTED_EXIT_CODE
     except Exception as error:  # noqa: BLE001 - last-resort internal_error mapping
         # The exception class and traceback are human diagnostics that
         # docs/formats.md keeps out of the envelope: they go only to stderr,
@@ -638,9 +660,8 @@ def main(
         else:
             hint = " (rerun with --traceback for the full traceback)"
         return _emit_error(
-            stdout, stderr, "internal_error",
+            stdout, stderr, ErrorCode.INTERNAL_ERROR,
             "An internal error prevented a result; see standard error.",
-            exit_code=70,
             diagnostic=f"internal error: {type(error).__name__}: {error}{hint}",
         )
 
