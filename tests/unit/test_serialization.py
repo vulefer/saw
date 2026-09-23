@@ -990,3 +990,50 @@ def test_error_envelope_has_exactly_the_documented_members() -> None:
 def test_error_envelope_rejects_an_undocumented_code() -> None:
     with pytest.raises(ValueError):
         saw.json_from_error("no_such_code", "message")
+
+
+# --- nesting depth: one limit on every platform -----------------------------
+
+
+def _nested(depth: int) -> str:
+    return "[" * depth + "]" * depth
+
+
+def test_nesting_at_the_limit_is_left_to_the_parser() -> None:
+    # Valid JSON at the limit parses; it is only rejected as a non-object.
+    with pytest.raises(SerializationError) as caught:
+        problem_from_json(_nested(saw.serialization.MAX_NESTING_DEPTH))
+
+    assert caught.value.code is SerializationErrorCode.SCHEMA_VIOLATION
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        _nested(saw.serialization.MAX_NESTING_DEPTH + 1),
+        # Deep enough to parse on a large C stack, yet exhaust a small one:
+        # the outcome must not depend on which one this machine has.
+        _nested(100_000),
+        "[" * 100_000,
+    ],
+    ids=["one-past-the-limit", "closed-100k", "unclosed-100k"],
+)
+def test_nesting_past_the_limit_is_invalid_json(text: str) -> None:
+    with pytest.raises(SerializationError) as caught:
+        problem_from_json(text)
+
+    assert caught.value.code is SerializationErrorCode.INVALID_JSON
+    assert "nested" in str(caught.value)
+
+
+def test_brackets_inside_strings_do_not_count_as_nesting() -> None:
+    deep_text = "[" * 1_000 + '\\"' + "{" * 1_000
+    problem = json.dumps(
+        {
+            "format_version": 1,
+            "stocks": [_valid_stock(stock_id=deep_text)],
+            "demands": [],
+        }
+    )
+
+    assert problem_from_json(problem).stocks[0].stock_id == deep_text

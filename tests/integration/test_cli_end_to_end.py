@@ -440,7 +440,7 @@ def _problem_bytes(*, format_version: int = 1, stock_length: int = 10) -> bytes:
         (["solve"], b"", "invalid_json"),
         (["solve"], b"{", "invalid_json"),
         (["solve"], b'{"format_version": 1, "format_version": 1}', "invalid_json"),
-        (["solve"], "﻿{}".encode("utf-16"), "invalid_json"),
+        (["solve"], "\ufeff{}".encode("utf-16"), "invalid_json"),
         (["solve"], b'{"format_version": 1, "x": "\xe9"}', "invalid_json"),
         (["solve"], b'{"format_version": NaN}', "invalid_json"),
         (["solve"], b"[" * 100_000 + b"]" * 100_000, "invalid_json"),

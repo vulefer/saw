@@ -40,6 +40,7 @@ from __future__ import annotations
 import codecs
 import json
 import math
+import re
 from collections.abc import Callable, Iterable
 
 from saw.exceptions import (
@@ -130,7 +131,7 @@ def _decode_problem_bytes(data: bytes) -> str:
             f"offset {error.start} cannot be decoded.",
             code=SerializationErrorCode.INVALID_JSON,
         ) from None
-    text = text.removeprefix("﻿")
+    text = text.removeprefix("\ufeff")
     # Only RFC 8259 insignificant whitespace counts as empty; anything else
     # is left for the JSON parser to report.
     if not text.strip(" \t\r\n"):
@@ -212,7 +213,36 @@ def problem_from_json(text: str) -> Problem:
 # --- JSON syntax -----------------------------------------------------------
 
 
+#: Deepest array/object nesting accepted before parsing. A version 1 problem
+#: nests three levels deep; without an explicit limit, whether deeper input
+#: parses at all depends on the interpreter's C stack size, so the same
+#: document could be ``invalid_json`` on one platform and parse (and then
+#: fail differently) on another.
+MAX_NESTING_DEPTH = 64
+
+# A complete JSON string (skipped, so brackets inside it are not counted) or
+# one structural bracket.
+_STRING_OR_BRACKET = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|[\[\]{}]')
+
+
+def _check_nesting_depth(text: str) -> None:
+    depth = 0
+    for match in _STRING_OR_BRACKET.finditer(text):
+        token = match.group()
+        if token in "[{":
+            depth += 1
+            if depth > MAX_NESTING_DEPTH:
+                raise SerializationError(
+                    "Input is not valid JSON: arrays or objects are nested "
+                    f"more than {MAX_NESTING_DEPTH} levels deep.",
+                    code=SerializationErrorCode.INVALID_JSON,
+                )
+        elif token in "]}":
+            depth -= 1
+
+
 def _load_json(text: str) -> object:
+    _check_nesting_depth(text)
     try:
         return json.loads(
             text,
@@ -230,8 +260,8 @@ def _load_json(text: str) -> object:
             code=SerializationErrorCode.INVALID_JSON,
         ) from error
     except RecursionError as error:
-        # Pathologically deep nesting exhausts the parser's stack. No
-        # version 1 problem nests more than a few levels, so this is
+        # A safety net behind _check_nesting_depth: nesting shallow enough
+        # to pass it but still too deep for this interpreter's stack is
         # unacceptable input, not an internal failure.
         raise SerializationError(
             "Input is not valid JSON: arrays or objects are nested too deeply.",
