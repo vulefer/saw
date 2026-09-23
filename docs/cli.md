@@ -24,6 +24,21 @@ An output write failure is the unavoidable exception: the CLI exits with code
 standard output contains a complete JSON document. The CLI must not print a
 second JSON document after a partial write.
 
+## Input decoding
+
+The selected input (a file or standard input) is read completely as bytes and
+decoded as strict UTF-8, independent of the console code page or locale. A
+single leading UTF-8 byte order mark is ignored. Input that is not UTF-8
+(including UTF-16/UTF-32 text with a byte order mark) or that is empty or
+whitespace-only was read successfully but is not one JSON document, so it maps
+to `invalid_json` with exit code `2`. Only a failure to open or read the
+source maps to `input_read_error` with exit code `74`.
+
+Host paths, exception classes, and tracebacks never appear in the error
+envelope; the CLI mirrors each error message as a one-line diagnostic on
+standard error, where such details may appear. A full traceback is written to
+standard error only when requested with `--traceback`.
+
 ## Exit codes
 
 Exit codes are integers in the portable range `0` through `125`. Their meanings

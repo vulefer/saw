@@ -19,7 +19,9 @@ argument parser independent of solver implementation details, per
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
+import os
 import sys
 import textwrap
 import traceback
@@ -68,6 +70,24 @@ _SERIALIZATION_ERROR_CODES: dict[SerializationErrorCode, str] = {
 
 class _CliUsageError(Exception):
     """An argparse-detected usage problem, routed to the JSON error contract."""
+
+
+class _InputReadError(Exception):
+    """The selected input source could not be read completely (exit 74).
+
+    ``str(error)`` is the envelope message and names only the kind of
+    source; ``detail`` may name a host path and the OS error, so it is only
+    ever written to standard error (docs/formats.md, "Envelope and required
+    fields").
+    """
+
+    def __init__(self, message: str, detail: str) -> None:
+        super().__init__(message)
+        self.detail = detail
+
+
+class _InputDecodeError(Exception):
+    """Input was read completely but is not one UTF-8 JSON text (exit 2)."""
 
 
 class _ArgumentParser(argparse.ArgumentParser):
@@ -143,6 +163,17 @@ def _add_solve_subcommand(subparsers: argparse._SubParsersAction) -> None:
             "  saw solve -               read the problem from standard input\n"
             "  saw solve                 same as '-': read from standard input\n"
             "\n"
+            "Input encoding:\n"
+            + textwrap.indent(
+                textwrap.fill(
+                    "Input is read as bytes and must be UTF-8 (RFC 8259), "
+                    "regardless of the console or locale encoding. A leading "
+                    "UTF-8 byte order mark is ignored. Empty input is "
+                    "reported as invalid_json."
+                ),
+                "  ",
+            )
+            + "\n\n"
             "Output behavior:\n"
             + textwrap.indent(
                 textwrap.fill(
@@ -229,22 +260,82 @@ def _add_solve_subcommand(subparsers: argparse._SubParsersAction) -> None:
             f"disable it (default: {_DEFAULT_OPTIONS.numeric_magnitude_limit})."
         ),
     )
+    parser.add_argument(
+        "--traceback",
+        action="store_true",
+        help=(
+            "On an internal or backend failure, also write the full Python "
+            "traceback to standard error. Standard output is unaffected."
+        ),
+    )
     parser.set_defaults(handler=_run_solve)
+
+
+def _print_diagnostic(stderr: IO[str] | None, text: str) -> None:
+    """Best-effort human diagnostic on standard error.
+
+    Standard error is advisory (docs/cli.md): a closed or broken stderr must
+    never change the exit code or the standard-output document.
+    """
+    if stderr is None:
+        return
+    try:
+        print(text, file=stderr)
+        stderr.flush()
+    except (OSError, ValueError):
+        pass
+
+
+def _print_traceback(stderr: IO[str] | None) -> None:
+    if stderr is None:
+        return
+    try:
+        traceback.print_exc(file=stderr)
+        stderr.flush()
+    except (OSError, ValueError):
+        pass
+
+
+def _discard_further_stdout_writes(stdout: IO[str]) -> None:
+    """Point the process's standard output at the null device.
+
+    After a failed write, text may still sit in the stdout buffer; the
+    interpreter retries flushing it at shutdown, fails again on the broken
+    pipe, prints "Exception ignored ... BrokenPipeError" to stderr, and
+    forces exit code 120 instead of 74. Redirecting the file descriptor
+    makes that final flush succeed silently. Only done for the real process
+    stream, never for injected streams.
+    """
+    if stdout is not sys.stdout and stdout is not sys.__stdout__:
+        return
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(devnull, stdout.fileno())
+        finally:
+            os.close(devnull)
+    except (OSError, ValueError, AttributeError):
+        pass
 
 
 def _write_document(stdout: IO[str], stderr: IO[str], text: str) -> int | None:
     """Write one JSON document plus a trailing newline to ``stdout``.
 
     Returns ``None`` on success, or the exit code ``74`` (and a stderr
-    diagnostic) on an output write failure. Never writes a second document
-    on failure, per docs/cli.md.
+    diagnostic) on an output write failure, including a broken pipe when
+    the reader exits early. Never writes a second document on failure, per
+    docs/cli.md.
     """
     try:
         stdout.write(text)
         stdout.write("\n")
         stdout.flush()
-    except OSError as error:
-        print(f"{PROG}: could not write output: {error}", file=stderr)
+    except (OSError, ValueError, AttributeError) as error:
+        # OSError covers BrokenPipeError (EPIPE) and Windows' EINVAL for a
+        # closed pipe; ValueError is a closed stream; AttributeError is a
+        # missing stream (sys.stdout is None under pythonw).
+        _discard_further_stdout_writes(stdout)
+        _print_diagnostic(stderr, f"{PROG}: could not write output: {error}")
         return 74
     return None
 
@@ -255,7 +346,16 @@ def _emit_error(
     code: str,
     message: str,
     exit_code: int,
+    *,
+    diagnostic: str | None = None,
 ) -> int:
+    """Write an error envelope to stdout and a human diagnostic to stderr.
+
+    ``diagnostic`` replaces ``message`` on stderr when it carries details
+    (host paths, exception classes) that must stay out of the closed
+    envelope (docs/formats.md, "Envelope and required fields").
+    """
+    _print_diagnostic(stderr, f"{PROG}: error: {diagnostic or message}")
     document = json.dumps(
         {"format_version": 1, "error": {"code": code, "message": message}},
         allow_nan=False,
@@ -264,11 +364,69 @@ def _emit_error(
     return write_failure if write_failure is not None else exit_code
 
 
-def _read_input(path: str, stdin: IO[str]) -> str:
+def _read_input(path: str, stdin: IO[str] | None) -> str:
+    """Read the whole problem text from ``path`` or, for ``-``, stdin.
+
+    Input is read as bytes and decoded as strict UTF-8, so the result never
+    depends on the console code page or locale encoding (e.g. cp1252 on
+    Windows). A text-only stream without a ``.buffer`` (such as an injected
+    ``io.StringIO``) is read as already-decoded text.
+
+    Raises:
+        _InputReadError: the source could not be opened or read completely.
+        _InputDecodeError: the input is not a non-empty UTF-8 text.
+    """
+    raw: bytes | str
     if path == "-":
-        return stdin.read()
-    with open(path, "r", encoding="utf-8") as handle:
-        return handle.read()
+        if stdin is None:
+            raise _InputReadError(
+                "Could not read standard input.",
+                "could not read standard input: it is not available",
+            )
+        try:
+            buffer = getattr(stdin, "buffer", None)
+            raw = buffer.read() if buffer is not None else stdin.read()
+        except (OSError, ValueError) as error:
+            raise _InputReadError(
+                "Could not read standard input.",
+                f"could not read standard input: {error}",
+            ) from error
+    else:
+        try:
+            with open(path, "rb") as handle:
+                raw = handle.read()
+        except (OSError, ValueError) as error:
+            raise _InputReadError(
+                "Could not read the input file.",
+                # strerror avoids repeating the path OSError already embeds.
+                f"could not read input file '{path}': "
+                f"{getattr(error, 'strerror', None) or error}",
+            ) from error
+
+    text = _decode_input(raw) if isinstance(raw, bytes) else raw
+    text = text.removeprefix("﻿")
+    # Only RFC 8259 insignificant whitespace counts as empty; anything else
+    # is left for the JSON parser to report.
+    if not text.strip(" \t\r\n"):
+        raise _InputDecodeError(
+            "Input is empty; expected exactly one JSON problem document."
+        )
+    return text
+
+
+def _decode_input(raw: bytes) -> str:
+    if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        raise _InputDecodeError(
+            "Input starts with a UTF-16 or UTF-32 byte order mark; JSON input "
+            "must be UTF-8."
+        )
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise _InputDecodeError(
+            f"Input is not valid UTF-8: byte 0x{raw[error.start]:02x} at "
+            f"offset {error.start} cannot be decoded."
+        ) from error
 
 
 def _run_solve(
@@ -280,10 +438,16 @@ def _run_solve(
 ) -> int:
     try:
         problem_text = _read_input(args.input, stdin)
-    except (OSError, UnicodeDecodeError) as error:
+    except _InputReadError as error:
         return _emit_error(
-            stdout, stderr, "input_read_error",
-            f"Could not read input {args.input!r}: {error}", exit_code=74,
+            stdout, stderr, "input_read_error", str(error), exit_code=74,
+            diagnostic=error.detail,
+        )
+    except _InputDecodeError as error:
+        # Read completely but not one UTF-8 JSON text: invalid content, not
+        # an I/O failure, so rerunning cannot help (exit 2, not 74).
+        return _emit_error(
+            stdout, stderr, "invalid_json", str(error), exit_code=2,
         )
 
     try:
@@ -311,10 +475,14 @@ def _run_solve(
             stdout, stderr, "invalid_cli_usage", str(error), exit_code=2,
         )
     except BackendUnavailableError as error:
+        if args.traceback:
+            _print_traceback(stderr)
         return _emit_error(
             stdout, stderr, "backend_unavailable", str(error), exit_code=6,
         )
     except InternalVerificationError as error:
+        if args.traceback:
+            _print_traceback(stderr)
         return _emit_error(
             stdout, stderr, "internal_verification_error", str(error),
             exit_code=70,
@@ -325,6 +493,8 @@ def _run_solve(
     except SerializationError as error:
         # solve() returned an internally inconsistent Solution: a saw bug,
         # not a CLI usage or input problem.
+        if args.traceback:
+            _print_traceback(stderr)
         return _emit_error(
             stdout, stderr, "internal_error", str(error), exit_code=70,
         )
@@ -342,6 +512,11 @@ def main(
     stdout: IO[str] | None = None,
     stderr: IO[str] | None = None,
 ) -> int:
+    """Run the CLI and return its documented exit code (docs/cli.md).
+
+    Streams default to the process's ``sys`` streams and may be injected for
+    testing. Every path writes at most one JSON document to ``stdout``.
+    """
     stdin = sys.stdin if stdin is None else stdin
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
@@ -364,12 +539,19 @@ def main(
     try:
         return handler(args, stdin=stdin, stdout=stdout, stderr=stderr)
     except Exception as error:  # noqa: BLE001 - last-resort internal_error mapping
-        # The full traceback is a human diagnostic (docs/cli.md, "Standard
-        # streams"): it goes only to stderr, never into the stdout JSON.
-        traceback.print_exc(file=stderr)
+        # The exception class and traceback are human diagnostics that
+        # docs/formats.md keeps out of the envelope: they go only to stderr,
+        # and the full traceback only on request.
+        if getattr(args, "traceback", False):
+            _print_traceback(stderr)
+            hint = ""
+        else:
+            hint = " (rerun with --traceback for the full traceback)"
         return _emit_error(
             stdout, stderr, "internal_error",
-            f"{type(error).__name__}: {error}", exit_code=70,
+            "An internal error prevented a result; see standard error.",
+            exit_code=70,
+            diagnostic=f"internal error: {type(error).__name__}: {error}{hint}",
         )
 
 

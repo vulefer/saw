@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import subprocess
+import sys
 
 import pytest
 
@@ -117,7 +120,136 @@ def test_missing_input_file_is_an_input_read_error(tmp_path) -> None:
     assert exit_code == 74
     payload = json.loads(stdout)
     assert payload["error"]["code"] == "input_read_error"
-    assert stderr == ""
+    # The host path is a human diagnostic: stderr only, never the envelope.
+    assert str(missing) not in payload["error"]["message"]
+    assert str(missing) in stderr
+
+
+def test_directory_input_path_is_an_input_read_error(tmp_path) -> None:
+    exit_code, stdout, stderr = _run(["solve", str(tmp_path)])
+
+    assert exit_code == 74
+    assert json.loads(stdout)["error"]["code"] == "input_read_error"
+    assert stderr.startswith("saw: error: could not read input file")
+
+
+class _FailingBuffer:
+    def read(self) -> bytes:
+        raise OSError("device error")
+
+
+class _UnreadableStdin:
+    buffer = _FailingBuffer()
+
+
+def test_unreadable_stdin_is_an_input_read_error() -> None:
+    stdout, stderr = io.StringIO(), io.StringIO()
+
+    exit_code = cli.main(
+        ["solve", "-"], stdin=_UnreadableStdin(), stdout=stdout, stderr=stderr
+    )
+
+    assert exit_code == 74
+    assert json.loads(stdout.getvalue())["error"]["code"] == "input_read_error"
+    assert "device error" in stderr.getvalue()
+
+
+def test_missing_stdin_is_an_input_read_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # sys.stdin is None under pythonw or with file descriptor 0 closed.
+    monkeypatch.setattr(sys, "stdin", None)
+    stdout = io.StringIO()
+
+    exit_code = cli.main(["solve"], stdout=stdout, stderr=io.StringIO())
+
+    assert exit_code == 74
+    assert json.loads(stdout.getvalue())["error"]["code"] == "input_read_error"
+
+
+@pytest.mark.parametrize("source", ["file", "stdin"])
+@pytest.mark.parametrize("content", [b"", b"   \r\n\t\n", b"\xef\xbb\xbf"])
+def test_empty_input_is_invalid_json(tmp_path, source: str, content: bytes) -> None:
+    exit_code, stdout, stderr = _run_bytes(tmp_path, source, content)
+
+    assert exit_code == 2
+    payload = json.loads(stdout)
+    assert payload["error"]["code"] == "invalid_json"
+    assert "empty" in payload["error"]["message"]
+    assert "empty" in stderr
+
+
+# --- Input encoding ------------------------------------------------------
+
+_NON_ASCII_PROBLEM = {
+    "format_version": 1,
+    "stocks": [
+        {"stock_id": "šipka-10", "material_id": "čelik", "length": 10, "quantity": 1}
+    ],
+    "demands": [
+        {"demand_id": "komad-ž", "material_id": "čelik", "length": 6, "quantity": 1}
+    ],
+}
+
+
+def _run_bytes(tmp_path, source: str, content: bytes) -> tuple[int, str, str]:
+    """Run ``saw solve`` on raw bytes from a file or a byte-backed stdin.
+
+    The stdin wrapper deliberately declares a non-UTF-8 text encoding, like a
+    Windows console (cp1252), to prove the CLI decodes the underlying bytes
+    itself instead of trusting the locale.
+    """
+    stdout, stderr = io.StringIO(), io.StringIO()
+    if source == "file":
+        path = tmp_path / "problem.json"
+        path.write_bytes(content)
+        argv, stdin = ["solve", str(path)], io.StringIO()
+    else:
+        argv = ["solve", "-"]
+        stdin = io.TextIOWrapper(io.BytesIO(content), encoding="cp1252")
+    exit_code = cli.main(argv, stdin=stdin, stdout=stdout, stderr=stderr)
+    return exit_code, stdout.getvalue(), stderr.getvalue()
+
+
+@pytest.mark.parametrize("source", ["file", "stdin"])
+@pytest.mark.parametrize("bom", [b"", b"\xef\xbb\xbf"], ids=["no-bom", "utf8-bom"])
+def test_utf8_input_is_decoded_independently_of_the_locale(
+    tmp_path, source: str, bom: bytes
+) -> None:
+    content = bom + json.dumps(_NON_ASCII_PROBLEM, ensure_ascii=False).encode("utf-8")
+
+    exit_code, stdout, _ = _run_bytes(tmp_path, source, content)
+
+    assert exit_code == 0
+    payload = json.loads(stdout)
+    assert payload["cut_patterns"][0]["stock_id"] == "šipka-10"
+    assert payload["cut_patterns"][0]["piece_counts"] == {"komad-ž": 1}
+
+
+@pytest.mark.parametrize("source", ["file", "stdin"])
+def test_non_utf8_input_is_invalid_json(tmp_path, source: str) -> None:
+    content = json.dumps(_NON_ASCII_PROBLEM, ensure_ascii=False).encode("latin-1", "replace")
+    content = content.replace(b"?", b"\xe8")  # a lone cp1252/latin-1 byte
+
+    exit_code, stdout, stderr = _run_bytes(tmp_path, source, content)
+
+    assert exit_code == 2
+    payload = json.loads(stdout)
+    assert payload["error"]["code"] == "invalid_json"
+    assert "UTF-8" in payload["error"]["message"]
+    assert "UTF-8" in stderr
+
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-32"])
+def test_utf16_or_utf32_input_is_invalid_json(tmp_path, encoding: str) -> None:
+    # Python's "utf-16"/"utf-32" codecs write a byte order mark, like
+    # Windows PowerShell 5's Out-File default.
+    content = _VALID_PROBLEM_JSON.encode(encoding)
+
+    exit_code, stdout, _ = _run_bytes(tmp_path, "file", content)
+
+    assert exit_code == 2
+    payload = json.loads(stdout)
+    assert payload["error"]["code"] == "invalid_json"
+    assert "byte order mark" in payload["error"]["message"]
 
 
 def test_malformed_json_is_invalid_json() -> None:
@@ -360,10 +492,63 @@ def test_unexpected_exception_exits_70_as_internal_error(
 
     monkeypatch.setattr(cli, "solve", fake_solve)
 
-    exit_code, stdout, _ = _run(["solve"], stdin_text=_VALID_PROBLEM_JSON)
+    exit_code, stdout, stderr = _run(["solve"], stdin_text=_VALID_PROBLEM_JSON)
 
     assert exit_code == 70
+    error = json.loads(stdout)["error"]
+    assert error["code"] == "internal_error"
+    # docs/formats.md: no exception class or traceback in the envelope.
+    assert "RuntimeError" not in error["message"]
+    assert "boom" not in error["message"]
+    # The concise diagnostic goes to stderr; the traceback is opt-in.
+    assert "RuntimeError: boom" in stderr
+    assert "--traceback" in stderr
+    assert "Traceback (most recent call last)" not in stderr
+
+
+def test_traceback_flag_writes_the_traceback_to_stderr_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_solve(problem, options):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli, "solve", fake_solve)
+
+    exit_code, stdout, stderr = _run(
+        ["solve", "--traceback"], stdin_text=_VALID_PROBLEM_JSON
+    )
+
+    assert exit_code == 70
+    assert stdout.count("\n") == 1
     assert json.loads(stdout)["error"]["code"] == "internal_error"
+    assert "Traceback (most recent call last)" not in stdout
+    assert "Traceback (most recent call last)" in stderr
+    assert "fake_solve" in stderr
+
+
+def test_traceback_flag_covers_handled_backend_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_solve(problem, options):
+        raise InternalVerificationError("candidate failed verification")
+
+    monkeypatch.setattr(cli, "solve", fake_solve)
+
+    exit_code, stdout, stderr = _run(
+        ["solve", "--traceback"], stdin_text=_VALID_PROBLEM_JSON
+    )
+
+    assert exit_code == 70
+    assert json.loads(stdout)["error"]["code"] == "internal_verification_error"
+    assert "Traceback (most recent call last)" in stderr
+
+
+def test_error_envelopes_are_mirrored_as_a_stderr_diagnostic() -> None:
+    exit_code, stdout, stderr = _run(["solve"], stdin_text="{not json")
+
+    assert exit_code == 2
+    message = json.loads(stdout)["error"]["message"]
+    assert stderr == f"saw: error: {message}\n"
 
 
 # --- Output write failures --------------------------------------------
@@ -390,6 +575,88 @@ def test_output_write_failure_exits_74_without_a_second_document(
 
     assert exit_code == 74
     assert "could not write output" in stderr.getvalue()
+
+
+def test_broken_stderr_never_changes_the_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = io.StringIO()
+
+    exit_code = cli.main(
+        ["solve"],
+        stdin=io.StringIO("{not json"),
+        stdout=stdout,
+        stderr=_BrokenStream(),
+    )
+
+    assert exit_code == 2
+    assert json.loads(stdout.getvalue())["error"]["code"] == "invalid_json"
+
+
+def test_both_streams_broken_still_exits_74(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "solve", lambda problem, options: _optimal_solution())
+
+    exit_code = cli.main(
+        ["solve"],
+        stdin=io.StringIO(_VALID_PROBLEM_JSON),
+        stdout=_BrokenStream(),
+        stderr=_BrokenStream(),
+    )
+
+    assert exit_code == 74
+
+
+# --- Real process: pipes, encodings, and interpreter shutdown ----------
+
+
+def _saw_process(argv: list[str], **kwargs) -> subprocess.Popen:
+    return subprocess.Popen(
+        [sys.executable, "-m", "saw", *argv],
+        stderr=subprocess.PIPE,
+        # The child must not inherit a UTF-8 override that would hide
+        # locale-dependent decoding bugs.
+        env={k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")},
+        **kwargs,
+    )
+
+
+def test_process_reads_utf8_stdin_bytes_and_writes_one_document() -> None:
+    content = json.dumps(_NON_ASCII_PROBLEM, ensure_ascii=False).encode("utf-8")
+
+    process = _saw_process(["solve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    out, err = process.communicate(content, timeout=120)
+
+    assert process.returncode == 0, err
+    assert out.endswith(b"\n")
+    assert out.count(b"\n") == 1
+    payload = json.loads(out)
+    assert payload["cut_patterns"][0]["stock_id"] == "šipka-10"
+    assert err == b""
+
+
+def test_process_broken_stdout_pipe_exits_74_without_shutdown_noise(tmp_path) -> None:
+    problem_path = tmp_path / "problem.json"
+    problem_path.write_text(_VALID_PROBLEM_JSON, encoding="utf-8")
+    # A pipe whose read end is closed before the child starts: the reader
+    # has "exited early", so the child's first stdout write fails
+    # deterministically (EPIPE on POSIX, EINVAL on Windows).
+    read_end, write_end = os.pipe()
+    os.close(read_end)
+    try:
+        process = _saw_process(
+            ["solve", str(problem_path)], stdin=subprocess.DEVNULL, stdout=write_end
+        )
+    finally:
+        os.close(write_end)
+    _, err = process.communicate(timeout=120)
+
+    assert process.returncode == 74, err
+    stderr = err.decode("utf-8", "replace")
+    assert "could not write output" in stderr
+    # Without redirecting the fd, the interpreter's shutdown flush would
+    # print this and force exit code 120.
+    assert "Exception ignored" not in stderr
+    assert "Traceback" not in stderr
 
 
 # --- Human-oriented output, outside the JSON contract -----------------
