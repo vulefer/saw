@@ -28,9 +28,8 @@ class Problem:
     demands: tuple[Demand, ...]
 
     def __post_init__(self) -> None:
-        #'frozen' prevents changing the attribute value, but does not prevent
-        # adding another stock into the tuple, this creates a copy of the tuple
-        # in order to not reference the original tuple
+        # callers may pass lists, converting to tuples makes a copy so later
+        # changes to the caller's list dont change the problem
         object.__setattr__(self, "stocks", tuple(self.stocks))
         object.__setattr__(self, "demands", tuple(self.demands))
 
@@ -108,19 +107,9 @@ class Diagnostics:
     completed_objective_stages: tuple[ObjectiveStage, ...]
     lower_bound: int | None
     upper_bound: int | None
-    # backend_id/backend_version identify which backend implementation (and
-    # which version of its solver dependency) was actually reached for this
-    # call. Both are None whenever no backend was consulted at all -- a
-    # preflight resource-limit outcome (problem_size_limit,
-    # numeric_magnitude_limit, or an already-expired deadline checked before
-    # backend.solve() is ever called) never sets them. They are populated
-    # from BackendAvailability as soon as solve() has called
-    # backend.check_availability(), which covers every other outcome,
-    # including `unsupported`. Unlike every other Diagnostics member, this
-    # pair is intentionally Python-API-only: the version 1 JSON solution
-    # format is a closed contract (see docs/formats.md) and does not carry
-    # them, so json_from_solution() never serializes these two fields. See
-    # docs/formats.md, "Diagnostics", for the full rule.
+    # which backend and solver version was used, None if a limit stopped solve()
+    # before any backend was reached
+    # python api ONLY, never written to json, see docs/formats.md "Diagnostics"
     backend_id: str | None = None
     backend_version: str | None = None
 

@@ -26,56 +26,36 @@ from saw.validation import validate_problem
 from saw.verification import verify_solution
 
 
+# raised when a SolveOptions value is invalid
+# subclasses ValueError as the docs promise, but has its own class so the cli can
+# report it as invalid_cli_usage without catching unrelated ValueErrors from bugs
 class InvalidSolveOptionsError(ValueError):
-    """A ``SolveOptions`` value was rejected before backend selection.
-
-    Subclasses ``ValueError`` so Python callers keep the documented
-    contract (docs/resource-limits.md: invalid options "raise
-    ``ValueError``"), while the CLI can map exactly this caller
-    configuration error to ``invalid_cli_usage`` without also swallowing an
-    unrelated ``ValueError`` raised by a backend bug.
-    """
+    pass
 
 
+# the settings for one solve() call
 @dataclass(frozen=True, slots=True)
 class SolveOptions:
-    # backend selection wrapper
-
     backend: str = "exact_enumerated"
-    # v0.2.0 safe defaults per docs/resource-limits.md's configuration
-    # table: omitting an option must not mean "unlimited". Pass None
-    # explicitly to disable a given limit for a call.
+    # safe defaults so leaving an option out never means unlimited,
+    # pass None to turn a limit off, see docs/resource-limits.md
     time_limit_seconds: float | None = 30.0
     pattern_limit: int | None = 50_000
-    # Preflight size guards, checked before backend availability, support,
-    # or pattern enumeration. Unlike time_limit_seconds and pattern_limit,
-    # these two are enforced by solve() itself (see docs/resource-limits.md),
-    # so their safe defaults are already active by default.
+    # size checks done by solve() itself before the backend is used
     problem_size_limit: int | None = 200
     numeric_magnitude_limit: int | None = 1_000_000
 
 
+# every backend saw can use, by name
 _BACKENDS: dict[str, OptimizationBackend] = {
     "exact_enumerated": ExactEnumeratedBackend(),
 }
 
 
+# raises InvalidSolveOptionsError for any bad option value (wrong type, bool,
+# zero, negative, NaN, infinity) before any backend is used
+# whether the backend name exists is checked later in _select_backend
 def _validate_solve_options(options: SolveOptions) -> None:
-    """Reject nonsensical or unsafe option values before backend selection.
-
-    This runs after ``validate_problem`` and before the backend registry is
-    consulted, so a malformed option can never reach ``check_availability``
-    or ``check_support``. It intentionally does not check whether
-    ``options.backend`` names a *registered* backend: that lookup stays in
-    ``_select_backend`` so unknown-backend handling remains deterministic
-    and unaffected by this check.
-
-    Every rejection raises ``InvalidSolveOptionsError`` (a ``ValueError``),
-    matching the resource-limit contract in docs/resource-limits.md:
-    booleans are not numbers, and zero, negative, non-finite,
-    fractional-for-an-integer-limit, or wrong-typed values are all invalid
-    configuration, never a solution result.
-    """
     _require_backend_identifier(options.backend)
     _require_optional_finite_positive_number(
         options.time_limit_seconds, "time_limit_seconds",
@@ -89,6 +69,7 @@ def _validate_solve_options(options: SolveOptions) -> None:
     )
 
 
+# the backend name must be a non-empty string
 def _require_backend_identifier(value: object) -> None:
     if not isinstance(value, str) or value == "":
         raise InvalidSolveOptionsError(
@@ -96,10 +77,8 @@ def _require_backend_identifier(value: object) -> None:
         )
 
 
+# None turns the limit off, otherwise it must be a finite number above 0
 def _require_optional_finite_positive_number(value: object, field: str) -> None:
-    # None disables the limit; every other invalid shape is rejected here so
-    # NaN, infinity, booleans, zero, negative values, and wrong types never
-    # reach backend selection.
     if value is None:
         return
     if (
@@ -114,8 +93,9 @@ def _require_optional_finite_positive_number(value: object, field: str) -> None:
         )
 
 
+# None turns the limit off, otherwise it must be a whole number above 0
 def _require_optional_positive_integer(value: object, field: str) -> None:
-    # bool is a subclass of int, so it must be rejected explicitly.
+    # bool counts as int in python, so true/false has to be rejected separately
     if value is None:
         return
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
@@ -125,6 +105,7 @@ def _require_optional_positive_integer(value: object, field: str) -> None:
         )
 
 
+# looks up the backend by name, raises InvalidSolveOptionsError if it doesnt exist
 def _select_backend(
     backend_id: str,
     backends: Mapping[str, OptimizationBackend],
@@ -139,6 +120,7 @@ def _select_backend(
         ) from None
 
 
+# the part of the options the backend needs, plus the shared deadline
 def _to_backend_options(
     options: SolveOptions,
     deadline: Deadline,
@@ -150,6 +132,7 @@ def _to_backend_options(
     )
 
 
+# turns the backend's result into a Solution, not verified yet
 def _to_public_solution(
     result: UnverifiedBackendResult,
     *,
@@ -166,12 +149,8 @@ def _to_public_solution(
         objective_value=(
             candidate.objective_value if candidate is not None else None
         ),
-        # Stamped on here rather than by the backend itself: solve() is the
-        # single place that already calls check_availability() (see
-        # docs/formats.md, "Diagnostics"), so every outcome that reached the
-        # backend reports the same backend_id/backend_version consistently,
-        # regardless of which internal helper inside the backend built this
-        # particular Diagnostics value.
+        # added here instead of in the backend, since solve() is the one place
+        # that knows them from check_availability()
         diagnostics=replace(
             result.diagnostics,
             backend_id=backend_id,
@@ -180,6 +159,7 @@ def _to_public_solution(
     )
 
 
+# result when the backend says it cant handle this problem
 def _unsupported_solution(
     *,
     backend_id: str,
@@ -198,23 +178,22 @@ def _unsupported_solution(
             completed_objective_stages=(),
             lower_bound=None,
             upper_bound=None,
-            # check_availability() already ran (see solve()) before
-            # check_support() declined the problem, so -- unlike the
-            # preflight size/time-limit outcomes below, which never reach a
-            # backend at all -- the backend that would have run this
-            # problem, and its dependency version, are already known.
+            # known here because check_availability() already ran,
+            # unlike the size and time limit results below
             backend_id=backend_id,
             backend_version=backend_version,
         ),
     )
 
 
+# True if there are more stock and demand records combined than the limit
 def _exceeds_problem_size_limit(problem: Problem, limit: int | None) -> bool:
     if limit is None:
         return False
     return len(problem.stocks) + len(problem.demands) > limit
 
 
+# True if any length or quantity is bigger than the limit
 def _exceeds_numeric_magnitude_limit(problem: Problem, limit: int | None) -> bool:
     if limit is None:
         return False
@@ -227,17 +206,10 @@ def _exceeds_numeric_magnitude_limit(problem: Problem, limit: int | None) -> boo
     return False
 
 
+# result when a size limit is hit, the backend never ran so there is no candidate
+# backend_status is LIMIT_REACHED and not NOT_RUN because the json schema requires
+# it for every limit status, NOT_RUN is only for unsupported
 def _size_limit_solution(started_at: float) -> Solution:
-    # A Saw-level preflight outcome that never touches a backend, so no
-    # candidate or objective stage is claimed. backend_status is
-    # LIMIT_REACHED -- not NOT_RUN -- because the version 1 JSON schema's
-    # limitDiagnostics requires backend_status: "limit_reached" for every
-    # `limit` solution_status, preflight or not (see
-    # schemas/solution-v1.schema.json and docs/formats.md, "Diagnostics");
-    # NOT_RUN is reserved for `unsupported`, whose schema instead requires
-    # it. Per docs/resource-limits.md, problem_size_limit and
-    # numeric_magnitude_limit share the SIZE_LIMIT termination reason; both
-    # are pre-solve size guards and neither implies infeasibility.
     return Solution(
         solution_status=SolutionStatus.LIMIT,
         cut_patterns=(),
@@ -255,20 +227,13 @@ def _size_limit_solution(started_at: float) -> Solution:
     )
 
 
+# rejects problems that are obviously too big before the backend is used
+# returns the limit result, or None if both size checks pass
 def _check_preflight_size_limits(
     problem: Problem,
     options: SolveOptions,
     started_at: float,
 ) -> Solution | None:
-    """Reject obviously oversized problems before enumeration or model
-    construction.
-
-    Runs after domain validation, option validation, and backend selection,
-    and before backend availability, support, or ``solve``. Evaluation order
-    matches docs/resource-limits.md: ``problem_size_limit`` is checked before
-    ``numeric_magnitude_limit``. Returns ``None`` when neither guard is
-    exceeded, so the caller proceeds to the backend unchanged.
-    """
     if _exceeds_problem_size_limit(problem, options.problem_size_limit):
         return _size_limit_solution(started_at)
     if _exceeds_numeric_magnitude_limit(problem, options.numeric_magnitude_limit):
@@ -276,19 +241,8 @@ def _check_preflight_size_limits(
     return None
 
 
+# same as _size_limit_solution but for time running out before the backend was reached
 def _time_limit_solution(started_at: float) -> Solution:
-    """Return the LIMIT/TIME_LIMIT outcome for a deadline already exhausted
-    before the backend could be reached.
-
-    Mirrors _size_limit_solution: a Saw-level preflight outcome that never
-    touches a backend, so no candidate or objective stage is claimed, and
-    backend_status is LIMIT_REACHED for the same schema reason documented
-    there (NOT_RUN is reserved for `unsupported`). Per
-    docs/resource-limits.md, "remaining end-to-end time" is checked
-    immediately after the problem_size_limit and numeric_magnitude_limit
-    preflight guards and before pattern_limit (which is only ever consulted
-    while enumerating, inside the backend).
-    """
     return Solution(
         solution_status=SolutionStatus.LIMIT,
         cut_patterns=(),
@@ -306,17 +260,18 @@ def _time_limit_solution(started_at: float) -> Solution:
     )
 
 
+# solves a problem and returns a verified solution, steps in order:
+# validate -> check options -> pick backend -> size limits -> time limit ->
+# availability -> support -> backend solve -> verify
 def solve(
     problem: Problem,
     options: SolveOptions | None = None,
 ) -> Solution:
 
-    # The end-to-end budget starts on entry, before problem validation,
-    # per docs/resource-limits.md, so a preflight size-limit outcome can
-    # still report a meaningful elapsed_time.
+    # the time budget starts here, before validation, see docs/resource-limits.md
     started_at = perf_counter()
 
-    # Validation intentionally precedes option handling and backend selection.
+    # the problem is validated before the options on purpose
     validate_problem(problem)
 
     effective_options = options or SolveOptions()
@@ -330,13 +285,7 @@ def solve(
     if size_limit_solution is not None:
         return size_limit_solution
 
-    # One shared, monotonic deadline for the rest of this call: pattern
-    # enumeration and all three lexicographic objective stages recompute
-    # their remaining time against it instead of each being handed the
-    # originally configured time_limit_seconds again. Per
-    # docs/resource-limits.md, "remaining end-to-end time" is the next
-    # check after the size preflight guards above, before pattern_limit
-    # (checked only later, while the backend enumerates).
+    # one shared deadline for the rest of the call, see timing.py
     deadline = Deadline.from_start(started_at, effective_options.time_limit_seconds)
     if deadline.expired():
         return _time_limit_solution(started_at)
@@ -364,6 +313,8 @@ def solve(
         backend_version=availability.backend_version,
     )
 
+    # optimal and feasible must come with a candidate, and every candidate
+    # (including one returned with a limit) must pass verification
     backend_status = result.diagnostics.backend_status
     statuses_requiring_candidate = {
         BackendStatus.OPTIMAL,
@@ -382,12 +333,14 @@ def solve(
             f"Backend reported {backend_status.value!r} without a candidate."
         )
 
+    # nothing to verify, e.g. infeasible or a limit without a candidate
     if (
         result.candidate is None
         or backend_status not in statuses_requiring_verification
     ):
         return unverified_solution
 
+    # any finding means the answer is not trusted and is never returned
     verification_report = verify_solution(problem, unverified_solution)
     if not verification_report.is_valid:
         finding_codes = ", ".join(

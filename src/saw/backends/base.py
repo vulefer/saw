@@ -18,18 +18,9 @@ from saw.timing import Deadline
 class BackendOptions:
     time_limit_seconds: float | None = None
     pattern_limit: int | None = None
-    # The shared end-to-end deadline for the current solve() call (see
-    # docs/resource-limits.md, "One end-to-end time budget"). solve()
-    # anchors this once, before problem validation, and threads it down so
-    # the exact_enumerated backend can recompute the remaining time before
-    # pattern enumeration and before each lexicographic stage instead of
-    # reusing time_limit_seconds -- the original configured value -- for
-    # every one of them. compare=False excludes it from equality/hash: two
-    # BackendOptions built from the same configuration are still equal even
-    # though a live Deadline carries a different absolute instant each time
-    # solve() runs. A backend that receives options.deadline is None (for
-    # example a direct unit-test call that never went through solve())
-    # falls back to anchoring its own deadline from time_limit_seconds.
+    # shared deadline for the whole solve() call, see timing.py
+    # compare=False so options with the same settings are still equal
+    # None means the backend makes its own deadline from time_limit_seconds
     deadline: Deadline | None = field(default=None, compare=False)
 
 
@@ -59,8 +50,8 @@ class BackendAvailability:
     backend_version: str | None = None
 
 
-# this dataclass is useful when one of the config limits is broken, for example the time limit
-# is breached
+# this dataclass is useful when one of the config limits is broken, for example the
+# time limit is breached
 @dataclass(frozen=True, slots=True)
 class BackendSupport:
     supported: bool
@@ -87,7 +78,7 @@ class UnverifiedBackendResult:
 def translate_backend_status(
     backend_status: BackendStatus,
 ) -> SolutionStatus:
-    """Translate normalized backend outcomes into public solution statuses."""
+    # mapping of backend statuses to solution statuses
 
     return {
         BackendStatus.OPTIMAL: SolutionStatus.OPTIMAL,

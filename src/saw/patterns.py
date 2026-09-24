@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from saw.timing import Deadline
 
-# this somehow prevents circular imports, im not sure how
+# imported only for type hints, this prevents circular imports by never running
 if TYPE_CHECKING:
     from saw.models import Demand, Problem, Stock
 
@@ -15,10 +15,10 @@ if TYPE_CHECKING:
 @dataclass(frozen=True, slots=True)
 class Pattern:
     stock_id: str
-    # the field options make sure piece_counts isnt used in hashing
+    # piece_counts is skipped in == and hashing, _normalized_counts is used instead
     piece_counts: Mapping[str, int] = field(compare=False, hash=False)
-    # init=False meand this cannot be passed into the constructor
-    # repr=False means the field is hidden even when printing the instance
+    # init=False means this cannot be passed into the constructor
+    # repr=False means the field is hidden when printing the instance
     _normalized_counts: tuple[tuple[str, int], ...] = field(
         init=False,
         repr=False,
@@ -42,51 +42,23 @@ class Pattern:
         )
 
 
-# result of enumerating patterns for a whole problem under an optional
-# pattern_limit budget.
+# outcome of enumerating patterns for a whole problem
+# if pattern_limit or the deadline is hit, patterns is empty, not a partial list
 @dataclass(frozen=True, slots=True)
 class PatternEnumerationResult:
-    """Outcome of a (possibly budget-limited) pattern enumeration pass.
-
-    When neither ``limit_reached`` nor ``deadline_expired`` is ``True``,
-    ``patterns`` holds every complete, non-empty pattern for the problem and
-    ``patterns_generated`` equals ``len(patterns)``.
-
-    When ``limit_reached`` is ``True``, enumeration stopped the moment
-    generating the next pattern would have exceeded ``pattern_limit``.
-    ``patterns_generated`` is then exactly the configured limit, and
-    ``patterns`` is always empty: per docs/resource-limits.md a pattern-limit
-    hit discards the partial enumeration rather than exposing it as if it
-    were a complete pattern set.
-
-    When ``deadline_expired`` is ``True``, the shared end-to-end deadline
-    passed before enumeration finished. ``patterns_generated`` is however
-    many patterns had actually been produced at that point (not a
-    configured ceiling), and ``patterns`` is always empty: a partial pattern
-    set is just as unsound to optimize over when time runs out as it is
-    when ``pattern_limit`` is hit, so it is discarded the same way.
-    ``limit_reached`` and ``deadline_expired`` are never both ``True``: per
-    docs/resource-limits.md, enumeration checks the deadline before checking
-    the pattern limit, so an already-expired deadline is reported as
-    ``deadline_expired`` even if the next pattern would also have exceeded
-    ``pattern_limit``.
-    """
-
     patterns: tuple[Pattern, ...]
     patterns_generated: int
     limit_reached: bool
     deadline_expired: bool = False
 
 
-# lazily walks the DFS tree for a single stock, yielding one pattern at a
-# time instead of materializing the whole set. This is what lets a shared
-# pattern_limit budget stop mid-stock, before a single stock's (possibly
-# exponential) pattern set is ever fully built in memory.
+# lazily walks the DFS tree for a single stock, yielding one pattern at a time
+# instead of building the whole set, so the caller can stop early on a limit
 def _iter_patterns_for_single_stock(
     stock: Stock,
     demands: tuple[Demand, ...],
 ) -> Iterator[Pattern]:
-    # makes sure that the stock and demand materials match
+    # keeps only the demands with the same material as the stock
     compatible_demands = tuple(
         demand
         for demand in demands
@@ -135,14 +107,10 @@ def enumerate_patterns_for_single_stock(
     return tuple(_iter_patterns_for_single_stock(stock, demands))
 
 
-# loops over the stocks tuple and enumerates patterns for each one, in
-# order, stopping as soon as generating the next pattern would exceed
-# pattern_limit, or as soon as the shared deadline has passed. The
-# pattern_limit budget is shared across every stock record, matching the
-# pattern_limit row of docs/resource-limits.md ("Complete, non-empty
-# patterns generated across all stock records"). deadline defaults to an
-# unlimited Deadline(None) so a caller with no time budget at all (or a
-# direct unit test) never needs to construct one.
+# enumerates patterns for every stock in order, stopping early if the deadline
+# passes or the next pattern would go over pattern_limit
+# pattern_limit counts patterns across all stocks, see docs/resource-limits.md
+# no deadline passed means no time limit
 def enumerate_patterns_for_problem(
     problem: Problem,
     pattern_limit: int | None = None,
@@ -154,12 +122,8 @@ def enumerate_patterns_for_problem(
 
     for stock in problem.stocks:
         for pattern in _iter_patterns_for_single_stock(stock, problem.demands):
-            # Per docs/resource-limits.md ("During enumeration Saw checks
-            # the time deadline before checking whether the next pattern
-            # would exceed the pattern limit"), the deadline is checked
-            # first: an already-expired deadline is reported as time_limit
-            # even if the next pattern would also have tripped
-            # pattern_limit.
+            # deadline is checked first, so if both limits are hit it counts
+            # as a time limit, see docs/resource-limits.md
             if effective_deadline.expired():
                 return PatternEnumerationResult(
                     patterns=(),
@@ -167,12 +131,8 @@ def enumerate_patterns_for_problem(
                     limit_reached=False,
                     deadline_expired=True,
                 )
-            # Checked before appending: when exactly `pattern_limit`
-            # patterns have already been generated, attempting this next
-            # (limit + 1)th one is what trips the limit. Reaching exactly
-            # pattern_limit and then running out of patterns on its own
-            # never enters this branch, so that case is allowed, per
-            # docs/resource-limits.md.
+            # checked before appending, so exactly pattern_limit patterns is
+            # allowed, only trying to add one more hits the limit
             if pattern_limit is not None and len(generated) >= pattern_limit:
                 return PatternEnumerationResult(
                     patterns=(),

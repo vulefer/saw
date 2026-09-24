@@ -1,9 +1,5 @@
-"""PuLP/CBC-specific integration for optimization backends.
-
-This module is the only place where Saw translates PuLP statuses or creates a
-CBC solver.  Domain-level backends can build their models separately and pass
-the resulting ``LpProblem`` to :class:`PulpCbcAdapter`.
-"""
+# the only place that creates a cbc solver or translates pulp statuses
+# backends build their own pulp model and pass it to PulpCbcAdapter to solve
 
 from typing import Final
 
@@ -15,10 +11,12 @@ from saw.exceptions import BackendUnavailableError
 from saw.models import BackendStatus
 
 
+# raised when pulp/cbc fails unexpectedly
 class PulpAdapterError(RuntimeError):
-    """Raised when PuLP/CBC fails unexpectedly at the adapter boundary."""
+    pass
 
 
+# translation of pulp statuses into saw's BackendStatus
 _PULP_STATUS_TRANSLATION: Final[dict[int, BackendStatus]] = {
     pulp_constants.LpStatusOptimal: BackendStatus.OPTIMAL,
     pulp_constants.LpStatusNotSolved: BackendStatus.NOT_SOLVED,
@@ -28,9 +26,8 @@ _PULP_STATUS_TRANSLATION: Final[dict[int, BackendStatus]] = {
 }
 
 
+# path to the cbc executable from the cbcbox package, None if it isnt installed
 def _packaged_cbc_path() -> str | None:
-    """Return the CBC path supplied by PuLP's optional ``cbc`` extra."""
-
     try:
         import cbcbox
     except ImportError:
@@ -39,9 +36,8 @@ def _packaged_cbc_path() -> str | None:
     return cbcbox.cbc_bin_path()
 
 
+# creates a cbc solver, using the cbcbox executable if there is one
 def _new_cbc_solver(options: BackendOptions) -> pulp.COIN_CMD:
-    """Construct CBC, preferring the executable from the declared extra."""
-
     return pulp.COIN_CMD(
         msg=False,
         timeLimit=options.time_limit_seconds,
@@ -49,18 +45,14 @@ def _new_cbc_solver(options: BackendOptions) -> pulp.COIN_CMD:
     )
 
 
+# translates pulp's model and solution status into saw's BackendStatus
+# unknown statuses stay UNKNOWN instead of claiming more than we know
 def translate_pulp_status(
     status: int,
     solution_status: int | None = None,
 ) -> BackendStatus:
-    """Translate PuLP model and solution statuses into Saw's vocabulary.
-
-    CBC can stop at a limit with a usable integer incumbent.  PuLP 3.x reports
-    that combination as an ``Optimal`` model status paired with an ``Integer
-    Feasible`` solution status.  It is only feasible, not proven optimal.
-    Unknown values remain unknown rather than acquiring a stronger claim.
-    """
-
+    # when cbc stops at a limit with a usable solution, pulp reports the model as
+    # optimal but the solution as integer feasible, so it is only FEASIBLE
     if (
         status
         in {
@@ -74,14 +66,12 @@ def translate_pulp_status(
     return _PULP_STATUS_TRANSLATION.get(status, BackendStatus.UNKNOWN)
 
 
+# creates, checks and runs the pulp/cbc solver
 class PulpCbcAdapter:
-    """Own construction, availability checks, and execution for PuLP/CBC."""
-
     backend_id: Final[str] = "pulp_cbc"
 
+    # reports whether pulp can find a cbc executable, never raises
     def check_availability(self) -> BackendAvailability:
-        """Report whether PuLP can find an executable CBC solver."""
-
         try:
             solver = _new_cbc_solver(BackendOptions())
             available = bool(solver.available())
@@ -111,9 +101,8 @@ class PulpCbcAdapter:
             backend_version=pulp.__version__,
         )
 
+    # creates the cbc solver with the given options
     def create_solver(self, options: BackendOptions) -> pulp.COIN_CMD:
-        """Create the configured command-line CBC solver."""
-
         try:
             return _new_cbc_solver(options)
         except Exception as exc:
@@ -121,13 +110,13 @@ class PulpCbcAdapter:
                 "PuLP/CBC solver construction failed."
             ) from exc
 
+    # solves an already built pulp model and returns the translated status
+    # cbc is checked again here since it could disappear after check_availability
     def solve(
         self,
         model: pulp.LpProblem,
         options: BackendOptions,
     ) -> BackendStatus:
-        """Solve a prepared PuLP model and return its translated status."""
-
         solver = self.create_solver(options)
 
         try:

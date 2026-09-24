@@ -3,16 +3,7 @@ from saw.models import Demand, Problem, Stock
 
 
 def validate_problem(problem: Problem) -> None:
-    """Validate the problem's data contract.
-
-    This function intentionally does not reject a problem because stock is
-    absent or unusable for a demand. Those are valid optimization inputs whose
-    feasibility must be decided by the solver.
-
-    Validation is deterministic and fail-fast: stock records are checked in
-    input order, followed by demand records, stock ID uniqueness, and demand ID
-    uniqueness.
-    """
+    # problem validation "parent" function
     validate_problem_records(problem)
     validate_problem_collections(problem)
 

@@ -1,39 +1,7 @@
-"""JSON serialization boundary for version 1 Saw problem and solution data.
-
-This module converts a versioned JSON problem request into the existing
-immutable :class:`~saw.models.Problem`, :class:`~saw.models.Stock`, and
-:class:`~saw.models.Demand` models, and converts an existing public
-:class:`~saw.models.Solution` into the version 1 JSON solution result. The
-full version 1 JSON problem and solution format contracts are documented in
-``docs/formats.md``; the companion structural schemas are
-``schemas/problem-v1.schema.json`` and ``schemas/solution-v1.schema.json``.
-This module is the authoritative implementation of the rules JSON Schema
-cannot express (duplicate member names, integer spelling, ID uniqueness, and
--- on the solution side -- which fields a given ``solution_status`` requires
-or forbids), so it does not depend on a JSON-schema library at run time.
-
-Only JSON *shape* is enforced on the read side: JSON syntax, the closed set
-of object members, and primitive types and spelling. Semantic rules --
-non-empty IDs, positive lengths and quantities, and stock/demand ID
-uniqueness -- are enforced by :func:`saw.validation.validate_problem`, not
-reimplemented in this module, so there is exactly one place those rules
-live.
-
-On the write side, :func:`json_from_solution` trusts the fields of a
-well-formed :class:`~saw.models.Solution` and is responsible only for
-choosing, from ``solution_status`` alone, which of the verified-plan members
-(``cut_patterns``, ``objective_value``, ``verification_report``) to include.
-It does not re-run verification; it raises
-:class:`~saw.exceptions.SerializationError` if the given ``Solution`` cannot
-be represented without contradicting its own declared status.
-
-This module knows nothing about a command-line interface, standard streams,
-exit codes, or input sources. It only turns JSON text or bytes that have
-already been read into a :class:`~saw.models.Problem`, a
-:class:`~saw.models.Solution` into JSON text, or an error code and message
-into a version 1 error envelope, raising
-:class:`~saw.exceptions.SerializationError` when it cannot.
-"""
+# format is explained in docs/formats.md and schemas/
+# reading only checks the json shape, value rules like positive lengths
+# are checked in validation.py so they live in one place
+# nothing here knows about the cli, files or exit codes
 
 from __future__ import annotations
 
@@ -71,52 +39,45 @@ __all__ = (
     "problem_from_json",
 )
 
-#: The only ``format_version`` value this module accepts.
+# the only format_version accepted
 SUPPORTED_FORMAT_VERSION = 1
 
+# the exact fields each json object must have, no more and no less
 _PROBLEM_MEMBERS = frozenset({"format_version", "stocks", "demands"})
 _STOCK_MEMBERS = frozenset({"stock_id", "material_id", "length", "quantity"})
 _DEMAND_MEMBERS = frozenset({"demand_id", "material_id", "length", "quantity"})
 
-#: Statuses whose verified-plan group (``cut_patterns``, ``objective_value``,
-#: ``verification_report``) is always required, per ``docs/formats.md``.
+# the verified plan is cut_patterns, objective_value and verification_report
+# these statuses must always include it, see docs/formats.md
 _STATUSES_REQUIRING_VERIFIED_PLAN = frozenset(
     {SolutionStatus.OPTIMAL, SolutionStatus.FEASIBLE}
 )
 
-#: Statuses whose verified-plan group is always forbidden.
+# these statuses must never include it
 _STATUSES_FORBIDDING_VERIFIED_PLAN = frozenset(
     {SolutionStatus.INFEASIBLE, SolutionStatus.UNSUPPORTED, SolutionStatus.ERROR}
 )
 
-#: The only status whose verified-plan group is conditional: present in full
-#: with a valid report, or absent in full.
+# limit includes the whole plan if a verified one was found, otherwise none of it
 _STATUS_WITH_OPTIONAL_VERIFIED_PLAN = SolutionStatus.LIMIT
 
 
+# raised for json that python's parser accepts but we dont, like duplicate keys or NaN
 class _JsonSyntaxError(ValueError):
-    """A JSON syntax problem this module rejects beyond RFC 8259 parsing."""
+    pass
 
 
+# parses a problem from raw bytes, the bytes are decoded as utf-8 first
 def problem_from_bytes(data: bytes) -> Problem:
-    """Decode and parse a version 1 JSON problem read as raw bytes.
-
-    The bytes must be UTF-8 (RFC 8259), independent of any locale or console
-    encoding. A single leading UTF-8 byte order mark is ignored. Input that
-    is empty or whitespace-only, is not UTF-8, or starts with a UTF-16 or
-    UTF-32 byte order mark was read successfully but is not one JSON
-    document, so it is reported as ``INVALID_JSON``.
-
-    Raises:
-        SerializationError: for any reason listed above, or any reason
-            :func:`problem_from_json` raises for the decoded text.
-    """
     return problem_from_json(_decode_problem_bytes(data))
 
 
+# turns bytes into text, raises INVALID_JSON if they are empty, not utf-8,
+# or start with a utf-16/utf-32 byte order mark
+# a utf-8 byte order mark at the start is ignored
 def _decode_problem_bytes(data: bytes) -> str:
-    # UTF-32-LE's BOM starts with UTF-16-LE's, so these two prefixes also
-    # catch both UTF-32 byte orders.
+    # the utf-32 marks start with the same bytes as the utf-16 ones,
+    # so this check catches both
     if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
         raise SerializationError(
             "Input starts with a UTF-16 or UTF-32 byte order mark; JSON input "
@@ -132,8 +93,7 @@ def _decode_problem_bytes(data: bytes) -> str:
             code=SerializationErrorCode.INVALID_JSON,
         ) from None
     text = text.removeprefix("\ufeff")
-    # Only RFC 8259 insignificant whitespace counts as empty; anything else
-    # is left for the JSON parser to report.
+    # only json whitespace counts as empty, anything else is left to the json parser
     if not text.strip(" \t\r\n"):
         raise SerializationError(
             "Input is empty; expected exactly one JSON problem document.",
@@ -142,13 +102,9 @@ def _decode_problem_bytes(data: bytes) -> str:
     return text
 
 
+# turns an error code and message into the json error output
+# message must not contain file paths, exception names or tracebacks
 def json_from_error(code: ErrorCode, message: str) -> str:
-    """Serialize a version 1 error envelope as JSON text.
-
-    ``message`` is for people and must not contain host paths, exception
-    class names, or tracebacks (docs/formats.md, "Envelope and required
-    fields"); those belong in a human diagnostic instead.
-    """
     return json.dumps(
         {
             "format_version": SUPPORTED_FORMAT_VERSION,
@@ -158,28 +114,12 @@ def json_from_error(code: ErrorCode, message: str) -> str:
     )
 
 
+# parses json text into a problem, checks run in order:
+# json syntax -> object shape -> format_version -> fields -> validate_problem
 def problem_from_json(text: str) -> Problem:
-    """Parse a version 1 JSON problem request into a :class:`Problem`.
-
-    Args:
-        text: Already-read JSON text, as described by ``docs/formats.md``.
-
-    Returns:
-        The equivalent immutable :class:`Problem`.
-
-    Raises:
-        SerializationError: if ``text`` is not syntactically valid JSON
-            (including duplicate object member names or non-standard
-            numeric constants such as ``NaN``); if the JSON does not
-            structurally match version 1 of the problem format (missing or
-            unknown members, or a primitive value with the wrong JSON type
-            or spelling); if ``format_version`` is a well-formed integer
-            other than ``1``; or if the assembled problem fails semantic
-            validation performed by :func:`saw.validation.validate_problem`.
-    """
     if not isinstance(text, str):
-        # json.loads would silently accept bytes and guess their encoding;
-        # problem_from_bytes applies the documented UTF-8 rules instead.
+        # json.loads would accept bytes and guess the encoding,
+        # bytes must go through problem_from_bytes instead
         raise TypeError(
             f"problem_from_json() expects str, not {type(text).__name__}; "
             "use problem_from_bytes() for undecoded input."
@@ -196,6 +136,7 @@ def problem_from_json(text: str) -> Problem:
 
     problem = Problem(stocks=stocks, demands=demands)
 
+    # value rule failures are turned into SEMANTIC_VALIDATION
     try:
         validate_problem(problem)
     except ValidationError as error:
@@ -213,18 +154,16 @@ def problem_from_json(text: str) -> Problem:
 # --- JSON syntax -----------------------------------------------------------
 
 
-#: Deepest array/object nesting accepted before parsing. A version 1 problem
-#: nests three levels deep; without an explicit limit, whether deeper input
-#: parses at all depends on the interpreter's C stack size, so the same
-#: document could be ``invalid_json`` on one platform and parse (and then
-#: fail differently) on another.
+# deepest nesting of arrays/objects allowed, a real problem only nests 3 deep
+# without this limit, deep input would fail differently on different platforms
+# this is only here to not run out of stack space in recursive calls
 MAX_NESTING_DEPTH = 64
 
-# A complete JSON string (skipped, so brackets inside it are not counted) or
-# one structural bracket.
+# matches a whole json string (so brackets inside strings are skipped) or one bracket
 _STRING_OR_BRACKET = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|[\[\]{}]')
 
 
+# counts brackets before parsing and raises INVALID_JSON if nesting is too deep
 def _check_nesting_depth(text: str) -> None:
     depth = 0
     for match in _STRING_OR_BRACKET.finditer(text):
@@ -241,6 +180,7 @@ def _check_nesting_depth(text: str) -> None:
             depth -= 1
 
 
+# parses the json text, turning every syntax failure into INVALID_JSON
 def _load_json(text: str) -> object:
     _check_nesting_depth(text)
     try:
@@ -260,15 +200,16 @@ def _load_json(text: str) -> object:
             code=SerializationErrorCode.INVALID_JSON,
         ) from error
     except RecursionError as error:
-        # A safety net behind _check_nesting_depth: nesting shallow enough
-        # to pass it but still too deep for this interpreter's stack is
-        # unacceptable input, not an internal failure.
+        # backup for _check_nesting_depth, if python still runs out of stack
+        # it is bad input, not an internal error
         raise SerializationError(
             "Input is not valid JSON: arrays or objects are nested too deeply.",
             code=SerializationErrorCode.INVALID_JSON,
         ) from None
 
 
+# used by json.loads to build objects, raises on a key that appears twice
+# (by default python would just keep the last one)
 def _reject_duplicate_members(pairs: Iterable[tuple[str, object]]) -> dict[str, object]:
     members: dict[str, object] = {}
     for name, value in pairs:
@@ -278,6 +219,7 @@ def _reject_duplicate_members(pairs: Iterable[tuple[str, object]]) -> dict[str, 
     return members
 
 
+# used by json.loads, raises on NaN, Infinity and -Infinity which are not real json
 def _reject_non_standard_constant(constant: str) -> None:
     raise _JsonSyntaxError(
         f"Non-standard JSON numeric constant {constant!r} is not permitted."
@@ -403,8 +345,7 @@ def _require_string(value: object, record_kind: str, index: int, field: str) -> 
 
 
 def _require_integer(value: object, record_kind: str, index: int, field: str) -> int:
-    # bool is a subclass of int in Python, so it must be rejected explicitly;
-    # JSON's own true/false spelling must not satisfy an integer field.
+    # bool counts as int in python, so true/false has to be rejected separately
     if isinstance(value, bool) or not isinstance(value, int):
         raise SerializationError(
             f"{record_kind}[{index}].{field} must use JSON integer spelling.",
@@ -419,39 +360,16 @@ def _require_integer(value: object, record_kind: str, index: int, field: str) ->
 # --- Solution serialization (Python -> JSON) --------------------------------
 
 
+# turns a solution into json text
+# whether the verified plan is included depends only on the status, never on
+# cut_patterns being empty, an empty list is a real plan that uses no stock
+# raises SCHEMA_VIOLATION if the solution contradicts its own status
 def json_from_solution(solution: Solution) -> str:
-    """Serialize a public :class:`~saw.models.Solution` as version 1 JSON text.
-
-    The verified-plan group (``cut_patterns``, ``objective_value``, and
-    ``verification_report``) is included or omitted based only on
-    ``solution.solution_status`` -- and, for ``limit``, on whether a verified
-    incumbent is present -- never on whether ``solution.cut_patterns`` happens
-    to be empty. An empty ``cut_patterns`` array is a real, verified
-    zero-stock plan and is represented the same way as any other verified
-    plan; it is never treated as an absent one.
-
-    Args:
-        solution: The solution to serialize, as documented in
-            ``docs/formats.md``.
-
-    Returns:
-        The equivalent version 1 JSON solution document as text.
-
-    Raises:
-        SerializationError: if ``solution.solution_status`` requires a
-            verified plan but ``solution.verification_report`` is missing;
-            if ``solution.solution_status`` forbids a verified plan but a
-            ``verification_report`` is present anyway; if a present
-            ``verification_report`` is not itself valid (an invalid report is
-            never evidence for a published plan); or if
-            ``solution.diagnostics.elapsed_time`` is not a finite number.
-    """
     payload = _solution_payload(solution)
     try:
         return json.dumps(payload, allow_nan=False)
     except ValueError as error:
-        # allow_nan=False turns a non-finite elapsed_time into a ValueError
-        # instead of writing non-standard JSON (NaN/Infinity) to the wire.
+        # allow_nan=False raises instead of writing NaN/Infinity, which is not real json
         raise SerializationError(
             "diagnostics.elapsed_time must be a finite JSON number.",
             code=SerializationErrorCode.SCHEMA_VIOLATION,
@@ -483,17 +401,10 @@ def _solution_payload(solution: Solution) -> dict[str, object]:
     return payload
 
 
+# decides if the verified plan goes in the output based on the status
+# also raises if the solution contradicts its status, so when this returns
+# True every plan field is guaranteed to be there
 def _includes_verified_plan(solution: Solution) -> bool:
-    """Decide whether the verified-plan group belongs in the output.
-
-    This is the single place that maps ``solution_status`` to plan-group
-    presence, per the table in ``docs/formats.md``. It also enforces that the
-    ``Solution`` given does not contradict its own declared status, so a
-    caller cannot accidentally under- or over-report the plan group by
-    passing an inconsistent value: every field the plan group needs is
-    checked for presence up front, so ``_solution_payload`` can read it
-    unconditionally once this returns ``True``.
-    """
     status = solution.solution_status
     has_report = solution.verification_report is not None
 
@@ -566,14 +477,8 @@ def _diagnostics_payload(diagnostics: Diagnostics) -> dict[str, object]:
             field="elapsed_time",
         )
 
-    # diagnostics.backend_id and diagnostics.backend_version are
-    # deliberately not included below. The version 1 JSON solution format
-    # is a closed contract (see docs/formats.md, "Unknown fields and format
-    # evolution" and schemas/solution-v1.schema.json's
-    # additionalProperties: false): adding a field to it requires a new
-    # format_version, not a silent addition to version 1. Those two members
-    # exist only on the Python Diagnostics object; see docs/formats.md,
-    # "Diagnostics", for where each Diagnostics field is available.
+    # backend_id and backend_version are left out on purpose, adding a field
+    # to the json needs a new format_version, see docs/formats.md "Diagnostics"
     return {
         "termination_reason": diagnostics.termination_reason.value,
         "backend_status": diagnostics.backend_status.value,
@@ -600,8 +505,7 @@ def _verification_finding_payload(finding: VerificationFinding) -> dict[str, obj
         "code": finding.code.value,
         "message": finding.message,
     }
-    # Context fields apply only when present; they are omitted rather than
-    # set to null so absence is unambiguous, matching docs/formats.md.
+    # optional fields are left out when missing instead of being written as null
     if finding.stock_id is not None:
         payload["stock_id"] = finding.stock_id
     if finding.demand_id is not None:

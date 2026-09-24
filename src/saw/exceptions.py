@@ -1,5 +1,6 @@
 '''exceptions raised by saw'''
 
+from __future__ import annotations
 from enum import Enum
 
 
@@ -44,21 +45,18 @@ class ValidationError(SawError):
 
 
 class SerializationErrorCode(str, Enum):
-    """Stable categories for failures while reading versioned data."""
+    # why reading a problem json failed, codes explained in docs/formats.md "Error codes"
 
-    INVALID_JSON = "invalid_json"
+    INVALID_JSON = "invalid_json" # -> 
     UNSUPPORTED_FORMAT_VERSION = "unsupported_format_version"
     SCHEMA_VIOLATION = "schema_violation"
     SEMANTIC_VALIDATION = "semantic_validation"
+    # note: both schema_violation and semantic_validation are reported as invalid_problem
+    # because the json was readable but it doesnt contain a valid problem
 
 
 class SerializationError(SawError):
-    """Raised when versioned serialized data cannot be read safely.
-
-    ``message`` is intended for people and is not a stable interface. Callers
-    should branch on ``code`` and may use the optional context to identify a
-    record or field without depending on a JSON-schema library's path format.
-    """
+    # raised when deserialization goes wrong, contains one of the codes above
 
     def __init__(
         self,
@@ -75,14 +73,14 @@ class SerializationError(SawError):
         self.record_index = record_index
         self.field = field
 
+    # read-only getter that translates the internal code into the public ErrorCode
     @property
-    def error_code(self) -> "ErrorCode":
-        """The version 1 error-envelope code for this failure."""
+    def error_code(self) -> ErrorCode:
         return _SERIALIZATION_ERROR_CODES[self.code]
 
 
 class ErrorCode(str, Enum):
-    """The closed set of version 1 error-envelope codes (docs/formats.md)."""
+    # every error code saw can output, explained in docs/formats.md "Error codes"
 
     INVALID_CLI_USAGE = "invalid_cli_usage"
     INVALID_JSON = "invalid_json"
@@ -95,8 +93,7 @@ class ErrorCode(str, Enum):
     OUTPUT_WRITE_ERROR = "output_write_error"
 
 
-# A problem that fails its schema or its semantic validation is reported the
-# same way: the document was readable but is not a valid problem.
+# translation of internal SerializationErrorCodes into public ErrorCodes
 _SERIALIZATION_ERROR_CODES: dict[SerializationErrorCode, ErrorCode] = {
     SerializationErrorCode.INVALID_JSON: ErrorCode.INVALID_JSON,
     SerializationErrorCode.UNSUPPORTED_FORMAT_VERSION: ErrorCode.UNSUPPORTED_FORMAT_VERSION,
