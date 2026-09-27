@@ -5,6 +5,7 @@ graft schemas
 graft examples
 graft tests
 graft scripts
+graft requirements
 
 prune tests/**/__pycache__
 global-exclude *.py[cod] __pycache__ .DS_Store Thumbs.db

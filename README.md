@@ -95,11 +95,14 @@ The complete platform and unsupported-environment policy is documented in
 ## Development
 
 Use a supported CPython version. From the repository root, install the package
-and its development dependencies with:
+and its development dependencies, pinned to the same versions CI uses, with:
 
 ```shell
-python -m pip install -e ".[dev]"
+python -m pip install --constraint requirements/dev.txt -e ".[dev]"
 ```
+
+The locks under `requirements/` and how to update them are described in
+[docs/dependencies.md](docs/dependencies.md).
 
 Run every test required for a release (unit, regression, oracle, and the
 documented example) with this single command from the repository root:
@@ -116,7 +119,8 @@ Saw v0.2 supports PuLP versions `>=3.3.2,<4` and cbcbox versions
 `>=2.929,<3`. Both are direct dependencies: PuLP provides the modeling API,
 and cbcbox provides the CBC executable used by the default backend.
 The adapter checks CBC availability at runtime and reports the installed PuLP
-version in its availability result.
+version in its availability result. No other runtime dependency is allowed
+into the core package; see [docs/dependencies.md](docs/dependencies.md).
 
 Public package publishing and release automation are deferred to a later
 release.

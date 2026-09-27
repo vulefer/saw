@@ -39,10 +39,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
           architecture: x64
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: requirements/dev.txt
 
-      - name: Install Saw and development dependencies
-        run: python -m pip install --upgrade ".[dev]"
+      - name: Install Saw and the locked development dependencies
+        run: python -m pip install --constraint requirements/dev.txt ".[dev]"
 
       - name: Run the release suite
         run: python scripts/run_release_tests.py
@@ -68,13 +68,38 @@ jobs:
           python-version: "3.10"
           architecture: x64
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: requirements/minimum.txt
 
-      - name: Install Saw with minimum dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install --editable . --no-deps
-          python -m pip install "PuLP==3.3.2" "cbcbox==2.929" "jsonschema==4.23.0" "pytest==9.0.0"
+      - name: Install Saw with the locked minimum dependencies
+        run: python -m pip install --constraint requirements/minimum.txt --editable ".[dev]"
+
+      - name: Run the release suite
+        run: python scripts/run_release_tests.py
+
+  # ignores the locks so a new upstream release inside the declared bounds
+  # shows up here before anyone regenerates requirements/dev.txt
+  latest-dependencies:
+    name: Latest dependencies / CPython ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.10"
+          - "3.14"
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v6
+
+      - name: Set up CPython
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          architecture: x64
+
+      - name: Install Saw with the newest allowed dependencies
+        run: python -m pip install --upgrade ".[dev]"
 
       - name: Run the release suite
         run: python scripts/run_release_tests.py
@@ -93,7 +118,7 @@ jobs:
           python-version: "3.14"
           architecture: x64
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: requirements/dev.txt
 
       - name: Build the distribution artifacts
         run: |
@@ -103,8 +128,7 @@ jobs:
       - name: Install the built wheel
         shell: bash
         run: |
-          python -m pip install "jsonschema>=4.23,<5" "pytest>=9,<10"
-          python -m pip install dist/*.whl
+          python -m pip install --constraint requirements/dev.txt "$(ls dist/*.whl)[dev]"
 
       - name: Run the release suite against the wheel
         run: python scripts/run_release_tests.py
