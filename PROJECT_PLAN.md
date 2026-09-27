@@ -1,6 +1,6 @@
 # Saw: Project Plan, Version Roadmap, and Repository Organization
 
-Saw is a correctness-first, open-source solver for one-dimensional cutting-stock problems. Its central promise is:
+Saw is a correctness-first solver for one-dimensional cutting-stock problems. Its central promise is:
 
 > Every returned plan is independently verified, and every claimed guarantee is backed by evidence.
 
@@ -167,7 +167,7 @@ This is the earliest release that should be made public, labeled **alpha**.
 - Input-order permutation does not change feasibility or objective value.
 - Several unfamiliar users have successfully solved their own problems.
 
-### v1.0.0: Stable open-source library
+### v1.0.0: Stable library
 
 **Theme:** Provide a dependable public contract.
 
