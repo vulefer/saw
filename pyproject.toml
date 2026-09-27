@@ -1,12 +1,26 @@
 [build-system]
-requires = ["setuptools>=61"]
+# 77 is the first release that understands PEP 639 license expressions
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "saw"
 version = "0.2.0.dev0"
+description = "A correctness-first solver for one-dimensional cutting-stock problems with independently verified solutions."
+readme = "README.md"
+# saw is proprietary, see LICENSE; PEP 639 forbids a license classifier next to this
+license = "LicenseRef-Proprietary"
+license-files = ["LICENSE"]
+authors = [{ name = "Petar Vujica", email = "petar.vujica@fer.hr" }]
+keywords = ["cutting stock", "1d cutting", "optimization", "integer programming", "solver"]
 requires-python = ">=3.10,<3.15"
 classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Manufacturing",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Typing :: Typed",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -19,14 +33,22 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
     "Private :: Do Not Upload",
 ]
+# pulp builds and runs the models, cbcbox ships the cbc binary it calls
 dependencies = [
     "PuLP>=3.3.2,<4",
     "cbcbox>=2.929,<3",
 ]
 
+[project.urls]
+Homepage = "https://github.com/vulefer/saw"
+Repository = "https://github.com/vulefer/saw"
+Documentation = "https://github.com/vulefer/saw/tree/main/docs"
+Issues = "https://github.com/vulefer/saw/issues"
+
 [project.scripts]
 saw = "saw.cli:main"
 
+# the library itself never imports these, only the test suite does
 [project.optional-dependencies]
 dev = [
     "jsonschema>=4.23,<5",
@@ -35,6 +57,12 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["saw*"]
+
+# py.typed is the only non-python file the wheel carries; schemas, docs and
+# examples ship in the sdist (see MANIFEST.in)
+[tool.setuptools.package-data]
+saw = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

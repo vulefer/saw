@@ -1,0 +1,11 @@
+# the sdist carries the contracts and docs the package promises, plus the
+# release suite so it can be tested from source
+graft docs
+graft schemas
+graft examples
+graft tests
+graft scripts
+
+prune tests/**/__pycache__
+global-exclude *.py[cod] __pycache__ .DS_Store Thumbs.db
+exclude linear_api.txt docs/linear_api.txt
