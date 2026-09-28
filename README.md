@@ -113,6 +113,26 @@ python scripts/run_release_tests.py
 
 The command exits with a non-zero status if any required test fails.
 
+## Building release artifacts
+
+From a clean checkout with the development dependencies installed, build the
+source distribution and the wheel into `dist/` and check both with:
+
+```shell
+python scripts/build_distributions.py
+```
+
+The wheel is built from the sdist, so a file missing from the sdist fails the
+build. The script then validates the core metadata of both artifacts against
+`pyproject.toml`, checks that the wheel carries the `saw` console entry point,
+`py.typed` and the versioned JSON schemas from `src/saw/schemas/` with a
+matching `RECORD`, checks that the sdist holds exactly the tracked release
+files, and fails if the build left any change in the checkout other than
+ignored outputs (`dist/`, `build/`, `*.egg-info`). It refuses to run on a
+checkout with uncommitted changes unless `--allow-dirty` is passed.
+Timestamps in the wheel are pinned to the last commit, so the same commit and
+toolchain produce a byte-identical wheel.
+
 ## Optimization backend dependencies
 
 Saw v0.2 supports PuLP versions `>=3.3.2,<4` and cbcbox versions

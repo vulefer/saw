@@ -27,7 +27,7 @@ from saw.patterns import Pattern
 
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
-SCHEMA_PATH = REPOSITORY_ROOT / "schemas" / "solution-v1.schema.json"
+SCHEMA_PATH = REPOSITORY_ROOT / "src" / "saw" / "schemas" / "solution-v1.schema.json"
 OPTIMAL_EXAMPLE_PATH = (
     REPOSITORY_ROOT / "examples" / "json" / "solution-v1-optimal.json"
 )
@@ -641,7 +641,7 @@ def test_real_preflight_size_limit_solve_output_validates(
     validator: Draft202012Validator,
 ) -> None:
     # Regression test: solve()'s preflight size_limit outcome once reported
-    # backend_status "not_run", which schemas/solution-v1.schema.json's
+    # backend_status "not_run", which src/saw/schemas/solution-v1.schema.json's
     # limitDiagnostics rejects for solution_status "limit" (it requires
     # "limit_reached"). See docs/formats.md, "Diagnostics", for the fixed
     # rule.

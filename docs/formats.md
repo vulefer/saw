@@ -13,7 +13,7 @@ section does not define a command-line interface or parser behavior beyond the
 validation and compatibility rules below.
 
 The companion structural schema is
-[`schemas/problem-v1.schema.json`](../schemas/problem-v1.schema.json). This
+[`schemas/problem-v1.schema.json`](../src/saw/schemas/problem-v1.schema.json). This
 document remains authoritative for rules that JSON Schema cannot express,
 including duplicate object member names, integer spelling, and ID uniqueness.
 
@@ -197,7 +197,7 @@ than a field on `Problem`.
 
 Version 1 is the canonical JSON representation of a public Saw solution. Its
 companion structural schema is
-[`schemas/solution-v1.schema.json`](../schemas/solution-v1.schema.json). The
+[`src/saw/schemas/solution-v1.schema.json`](../src/saw/schemas/solution-v1.schema.json). The
 schema and the status rules in this section are one contract: a consumer must
 not read a field independently of `solution_status` and infer a stronger claim.
 
@@ -368,7 +368,7 @@ never consult a backend at all.
 
 These two fields exist only on the Python object. The version 1 JSON solution
 format is a closed contract (see "Unknown fields and format evolution" above
-and `schemas/solution-v1.schema.json`'s `additionalProperties: false`):
+and `src/saw/schemas/solution-v1.schema.json`'s `additionalProperties: false`):
 `json_from_solution()` never writes them, and a future JSON member for backend
 or dependency identification would require a new `format_version`, not a
 silent addition to version 1. A caller that needs this information from the
@@ -460,7 +460,7 @@ attaching an `invalid` report would make the payload invalid.
 Version 1 is the canonical JSON representation of a failure which prevents the
 command-line interface from returning a normal solution outcome. Its companion
 structural schema is
-[`schemas/error-v1.schema.json`](../schemas/error-v1.schema.json). The error
+[`schemas/error-v1.schema.json`](../src/saw/schemas/error-v1.schema.json). The error
 format is independent of both the problem and solution format versions.
 
 Expected mathematical outcomes are not error envelopes. Proven infeasibility,

@@ -1,4 +1,4 @@
-# format is explained in docs/formats.md and schemas/
+# format is explained in docs/formats.md and src/saw/schemas/
 # reading only checks the json shape, value rules like positive lengths
 # are checked in validation.py so they live in one place
 # nothing here knows about the cli, files or exit codes

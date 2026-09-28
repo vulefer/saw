@@ -37,7 +37,7 @@ from jsonschema import Draft202012Validator
 
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
-SCHEMA_DIRECTORY = REPOSITORY_ROOT / "schemas"
+SCHEMA_DIRECTORY = REPOSITORY_ROOT / "src" / "saw" / "schemas"
 DOCUMENTED_PROBLEM = REPOSITORY_ROOT / "examples" / "json" / "problem-v1-valid.json"
 DOCUMENTED_SOLUTION = REPOSITORY_ROOT / "examples" / "json" / "solution-v1-optimal.json"
 # Put on PYTHONPATH to inject a named fault into the installed command; see

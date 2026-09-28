@@ -8,7 +8,7 @@ from jsonschema.exceptions import ValidationError
 
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
-SCHEMA_PATH = REPOSITORY_ROOT / "schemas" / "error-v1.schema.json"
+SCHEMA_PATH = REPOSITORY_ROOT / "src" / "saw" / "schemas" / "error-v1.schema.json"
 EXAMPLE_PATH = (
     REPOSITORY_ROOT
     / "examples"

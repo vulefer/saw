@@ -26,14 +26,16 @@ cbcbox.
 
 ## Development dependencies
 
-The `dev` extra holds what the release suite needs and nothing else:
+The `dev` extra holds what the release suite and the artifact build need
+and nothing else:
 
 | Package | Bounds | Why the suite needs it |
 | --- | --- | --- |
 | pytest | `>=9,<10` | Runs the release suite. |
-| jsonschema | `>=4.23,<5` | Checks JSON output against the draft 2020-12 schemas in `schemas/`. |
+| jsonschema | `>=4.23,<5` | Checks JSON output against the draft 2020-12 schemas in `src/saw/schemas/`. |
 | packaging | `>=24,<27` | Parses requirements and versions in the dependency policy tests. |
 | tomli | `>=2.0.1,<3` (Python 3.10 only) | Reads `pyproject.toml` where `tomllib` is not available. |
+| build | `>=1.2.1,<2` | Builds the sdist and wheel in `scripts/build_distributions.py`. |
 
 The library never imports these packages.
 

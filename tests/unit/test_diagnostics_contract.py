@@ -3,7 +3,7 @@
 These tests verify, for every public ``SolutionStatus``, that
 ``Solution.diagnostics`` matches the rules documented in
 ``docs/formats.md`` ("Diagnostics" and "Diagnostics by solution_status")
-and enforced structurally by ``schemas/solution-v1.schema.json``. They also
+and enforced structurally by ``src/saw/schemas/solution-v1.schema.json``. They also
 cover the two Python-only fields, ``backend_id`` and ``backend_version``
 (see ``docs/formats.md``, "Python-only diagnostics fields"): populated as
 soon as ``solve()`` reaches a backend's ``check_availability()``, and

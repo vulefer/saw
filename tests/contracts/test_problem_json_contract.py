@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
-SCHEMA_PATH = REPOSITORY_ROOT / "schemas" / "problem-v1.schema.json"
+SCHEMA_PATH = REPOSITORY_ROOT / "src" / "saw" / "schemas" / "problem-v1.schema.json"
 VALID_EXAMPLE_PATH = (
     REPOSITORY_ROOT / "examples" / "json" / "problem-v1-valid.json"
 )

@@ -4,12 +4,18 @@ attrs==26.1.0
     # via
     #   jsonschema
     #   referencing
+build==1.6.1
+    # via saw (pyproject.toml)
 cbcbox==2.935
     # via saw (pyproject.toml)
-colorama==0.4.6 ; sys_platform == 'win32'
-    # via pytest
+colorama==0.4.6 ; os_name == 'nt' or sys_platform == 'win32'
+    # via
+    #   build
+    #   pytest
 exceptiongroup==1.3.1 ; python_full_version < '3.11'
     # via pytest
+importlib-metadata==9.0.1 ; python_full_version < '3.10.2'
+    # via build
 iniconfig==2.3.0
     # via pytest
 jsonschema==4.26.0
@@ -19,6 +25,7 @@ jsonschema-specifications==2025.9.1
 packaging==26.3
     # via
     #   saw (pyproject.toml)
+    #   build
     #   pytest
 pluggy==1.6.0
     # via pytest
@@ -26,6 +33,8 @@ pulp==3.3.2
     # via saw (pyproject.toml)
 pygments==2.21.0
     # via pytest
+pyproject-hooks==1.3.3
+    # via build
 pytest==9.1.1
     # via saw (pyproject.toml)
 referencing==0.37.0
@@ -43,8 +52,11 @@ rpds-py==2026.6.3 ; python_full_version >= '3.11'
 tomli==2.4.1 ; python_full_version < '3.11'
     # via
     #   saw (pyproject.toml)
+    #   build
     #   pytest
 typing-extensions==4.16.0 ; python_full_version < '3.13'
     # via
     #   exceptiongroup
     #   referencing
+zipp==4.1.0 ; python_full_version < '3.10.2'
+    # via importlib-metadata

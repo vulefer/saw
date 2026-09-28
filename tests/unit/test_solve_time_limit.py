@@ -152,7 +152,7 @@ def _assert_time_limit_result(result) -> None:
     # backend_status is LIMIT_REACHED -- not NOT_RUN -- even for this
     # preflight-only outcome: the version 1 JSON schema's limitDiagnostics
     # requires backend_status: "limit_reached" for every `limit`
-    # solution_status (see schemas/solution-v1.schema.json and
+    # solution_status (see src/saw/schemas/solution-v1.schema.json and
     # docs/formats.md, "Diagnostics"). NOT_RUN is reserved for
     # `unsupported`.
     assert result.diagnostics.backend_status is BackendStatus.LIMIT_REACHED
