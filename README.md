@@ -133,6 +133,23 @@ checkout with uncommitted changes unless `--allow-dirty` is passed.
 Timestamps in the wheel are pinned to the last commit, so the same commit and
 toolchain produce a byte-identical wheel.
 
+To test the wheel users actually receive rather than an editable install, run:
+
+```shell
+python scripts/smoke_test_wheel.py
+```
+
+It creates a fresh virtual environment in a temporary directory outside the
+checkout and installs only the wheel from `dist/` (no extras, runtime
+dependencies pinned by `requirements/dev.txt`, change with `--constraint`).
+It then imports every `saw` module from that environment, so an undeclared
+runtime dependency fails even in a module the examples never reach, checks
+`py.typed` and the packaged JSON schemas against the source tree, and runs the
+Python example, `saw --help`, `saw --version`, and `saw solve` on the
+documented problem, validating its output with the schema loaded from the
+installed wheel. Every failure names the gate that broke. It needs network
+access to install PuLP and cbcbox and takes about half a minute.
+
 ## Optimization backend dependencies
 
 Saw v0.2 supports PuLP versions `>=3.3.2,<4` and cbcbox versions

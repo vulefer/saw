@@ -121,12 +121,17 @@ jobs:
           cache-dependency-path: requirements/dev.txt
 
       - name: Install the locked build and check tools
-        run: python -m pip install --constraint requirements/dev.txt build packaging
+        run: python -m pip install --constraint requirements/dev.txt build packaging jsonschema
 
       # fails on a dirty checkout, a packaging mistake, or a build that
       # leaves anything but ignored outputs behind
       - name: Build and check the distribution artifacts
         run: python scripts/build_distributions.py
+
+      # installs the wheel alone into a fresh environment, so missing
+      # package data or an undeclared runtime dependency fails here
+      - name: Smoke test the wheel in a clean environment
+        run: python scripts/smoke_test_wheel.py
 
       - name: Install the built wheel
         shell: bash
