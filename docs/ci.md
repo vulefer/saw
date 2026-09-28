@@ -28,7 +28,8 @@ After `build`, each job:
 2. runs `scripts/report_solver.py`, which prints the interpreter, the saw,
    PuLP, and cbcbox versions, the CBC executable Saw will use, and its build
    banner, and fails the job if CBC is not usable;
-3. runs the release suite, `scripts/run_release_tests.py`, against the
+3. runs the test phases of `scripts/run_release_tests.py` (`tests`,
+   `schemas`, `examples`) with `--current-environment`, against the
    installed wheel;
 4. runs `scripts/smoke_test_wheel.py`, which installs the same wheel alone
    into a fresh virtual environment under the job's runtime lock.

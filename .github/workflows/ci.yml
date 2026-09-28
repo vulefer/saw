@@ -115,8 +115,10 @@ jobs:
       - name: Report the solver stack
         run: python scripts/report_solver.py
 
+      # the runner's test phases in the environment the wheel was just
+      # installed into; static, build and smoke run in their own steps
       - name: Run the release suite against the wheel
-        run: python scripts/run_release_tests.py
+        run: python scripts/run_release_tests.py --current-environment --only tests --only schemas --only examples
 
       # the environment above also holds the dev extra, which could hide an
       # undeclared runtime dependency; the smoke test installs the wheel
@@ -162,7 +164,7 @@ jobs:
         run: python scripts/report_solver.py
 
       - name: Run the release suite against the wheel
-        run: python scripts/run_release_tests.py
+        run: python scripts/run_release_tests.py --current-environment --only tests --only schemas --only examples
 
       - name: Smoke test the wheel with the minimum runtime dependencies
         run: python scripts/smoke_test_wheel.py --constraint requirements/minimum.txt
@@ -204,7 +206,7 @@ jobs:
         run: python scripts/report_solver.py
 
       - name: Run the release suite against the wheel
-        run: python scripts/run_release_tests.py
+        run: python scripts/run_release_tests.py --current-environment --only tests --only schemas --only examples
 
       - name: Smoke test the wheel with the newest runtime dependencies
         run: python scripts/smoke_test_wheel.py --unlocked

@@ -101,14 +101,44 @@ python -m pip install --constraint requirements/dev.txt -e ".[dev]"
 The locks under `requirements/` and how to update them are described in
 [docs/dependencies.md](docs/dependencies.md).
 
-Run every test required for a release (unit, regression, oracle, and the
-documented example) with this single command from the repository root:
+Run the whole v0.2.0 release gate, the same checks CI runs, with this single
+command from a clean checkout at the repository root:
 
 ```shell
 python scripts/run_release_tests.py
 ```
 
-The command exits with a non-zero status if any required test fails.
+It runs these phases in order:
+
+| Phase | What it runs |
+| --- | --- |
+| `static` | `scripts/run_static_checks.py`: formatting, lint, and types. |
+| `build` | `scripts/build_distributions.py`: builds and checks the sdist and wheel. |
+| `install` | Installs that wheel with the `dev` extra, pinned by `requirements/dev.txt`, into a fresh virtual environment in a temporary directory. |
+| `tests` | Unit, integration (CLI end to end), regression, oracle, and compatibility tests. |
+| `schemas` | The JSON schema and serialization contract tests, including the example documents in `examples/json/`. |
+| `examples` | `examples/minimal.py` and the Python example in this README. |
+| `smoke` | `scripts/smoke_test_wheel.py`: the wheel alone in another fresh environment. |
+
+The test phases run with the interpreter of the fresh environment, which
+imports `saw` from the installed wheel, so the result never depends on an
+editable install or anything else left in your development environment.
+Only the runner itself needs the `dev` extra. A failed phase does not stop
+the phases that do not need it; phases that do (for example `install` after a
+failed `build`) are reported as not run. The runner ends with a summary of
+every phase and exits non-zero naming each failed gate.
+
+Select phases with `--only PHASE` or `--skip PHASE` (both repeatable). Pass
+`--allow-dirty` to build from uncommitted changes (new files must be staged,
+since the sdist check compares against `git ls-files`), and
+`--current-environment` to run the test phases with the current interpreter
+instead of a fresh one, as CI does after installing the wheel itself; the
+runner then prints where `saw` was imported from.
+
+A full run takes about three minutes on a recent desktop: roughly 15 seconds
+to build, 40 to create and install the environment, 80 for the tests, 25 for
+the smoke test, and a few seconds for everything else. Building, installing,
+and the smoke test need network access to download the dependencies.
 
 Run the formatter check, the linter, and the type checker, exactly as CI
 does, with:
