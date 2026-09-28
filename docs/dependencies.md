@@ -64,7 +64,7 @@ transitive, for all supported operating systems and Python 3.10 to 3.14:
 
 | File | Contents | Used by |
 | --- | --- | --- |
-| `requirements/dev.txt` | The newest versions the bounds allow at the time of locking. | Local development, the compatibility matrix, and the built-wheel job. |
+| `requirements/dev.txt` | The newest versions the bounds allow at the time of locking. | Local development, the static checks, the build, and the compatibility matrix. |
 | `requirements/minimum.txt` | Every direct dependency at its lower bound. | The minimum-dependencies job. |
 
 Both are generated from `pyproject.toml` by `scripts/lock_dependencies.py`

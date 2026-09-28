@@ -81,9 +81,11 @@ The compatibility contract is enforced in four places:
    supported Python and operating-system combination.
 3. The release suite checks that it is running on a declared interpreter,
    platform, and architecture and that the packaged CBC executable is usable.
-4. The minimum-dependency, latest-dependency, and built-wheel jobs verify
-   the lower dependency bounds, the newest releases within the bounds, and
-   clean package installation respectively.
+4. The minimum-dependency and latest-dependency jobs verify the lower
+   dependency bounds and the newest releases within the bounds, and every
+   CI job tests the one built wheel, including a clean installation into a
+   fresh environment. The jobs and the matrix strategy are described in
+   [ci.md](ci.md).
 
 Any change to the supported matrix must update all four enforcement points in
 the same pull request.

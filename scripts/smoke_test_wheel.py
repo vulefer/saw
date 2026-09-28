@@ -310,11 +310,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--wheel", type=Path, help="the wheel to test (default: the one saw wheel in dist/)"
     )
-    parser.add_argument(
+    locks = parser.add_mutually_exclusive_group()
+    locks.add_argument(
         "--constraint",
         type=Path,
         default=DEFAULT_CONSTRAINT,
         help="constraint file for the runtime dependencies (default: requirements/dev.txt)",
+    )
+    locks.add_argument(
+        "--unlocked",
+        action="store_true",
+        help="install the newest runtime dependencies the wheel allows",
     )
     arguments = parser.parse_args(argv)
 
@@ -328,7 +334,9 @@ def main(argv: list[str] | None = None) -> int:
         with tempfile.TemporaryDirectory(
             prefix="saw-wheel-smoke-", ignore_cleanup_errors=True
         ) as directory:
-            options = ("--constraint", str(arguments.constraint.resolve()))
+            options = (
+                () if arguments.unlocked else ("--constraint", str(arguments.constraint.resolve()))
+            )
             problems += smoke_test(wheel, options, Path(directory))
 
     for problem in problems:

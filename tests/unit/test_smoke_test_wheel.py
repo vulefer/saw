@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from scripts import smoke_test_wheel
 
 SCHEMAS = {
@@ -89,6 +91,27 @@ def test_find_wheel_needs_exactly_one_wheel(tmp_path) -> None:
     problems, wheel = smoke_test_wheel.find_wheel(tmp_path)
     assert wheel is None
     assert problems[0].startswith("more than one saw wheel")
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        ([], ("--constraint", str(smoke_test_wheel.DEFAULT_CONSTRAINT.resolve()))),
+        (["--constraint", "other.txt"], ("--constraint", str(Path("other.txt").resolve()))),
+        (["--unlocked"], ()),
+    ],
+)
+def test_the_lock_choice_reaches_pip(monkeypatch, tmp_path, arguments, expected) -> None:
+    received = []
+    monkeypatch.setattr(
+        smoke_test_wheel,
+        "smoke_test",
+        lambda wheel, options, directory: received.append(options) or [],
+    )
+    wheel = tmp_path / "saw-1.0.0-py3-none-any.whl"
+
+    assert smoke_test_wheel.main(["--wheel", str(wheel), *arguments]) == 0
+    assert received == [expected]
 
 
 def test_a_missing_wheel_fails_without_building_an_environment(

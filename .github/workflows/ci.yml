@@ -11,6 +11,9 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# the matrix strategy and what each job proves are documented in docs/ci.md.
+# every job after build installs the one wheel it produced, never the
+# checkout, so the release suite always tests the artifact users receive
 jobs:
   # the same command a maintainer runs locally, configured in pyproject.toml
   static-checks:
@@ -35,8 +38,43 @@ jobs:
       - name: Run the static checks
         run: python scripts/run_static_checks.py
 
+  # saw is pure python, so one py3-none-any wheel serves every os and python
+  build:
+    name: Build and check the distribution artifacts
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v6
+
+      - name: Set up CPython 3.14
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          architecture: x64
+          cache: pip
+          cache-dependency-path: requirements/dev.txt
+
+      - name: Install the locked build and check tools
+        run: python -m pip install --constraint requirements/dev.txt build packaging
+
+      # fails on a dirty checkout, a packaging mistake, or a build that
+      # leaves anything but ignored outputs behind
+      - name: Build and check the distribution artifacts
+        run: python scripts/build_distributions.py
+
+      - name: Upload the distribution artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # every supported os and python pair, since docs/compatibility.md promises
+  # each one; fail-fast is off so one broken cell cannot hide another
   compatibility:
     name: ${{ matrix.os }} / CPython ${{ matrix.python-version }}
+    needs: build
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -64,14 +102,31 @@ jobs:
           cache: pip
           cache-dependency-path: requirements/dev.txt
 
-      - name: Install Saw and the locked development dependencies
-        run: python -m pip install --constraint requirements/dev.txt ".[dev]"
+      - name: Download the built wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
 
-      - name: Run the release suite
+      - name: Install the built wheel and the locked development dependencies
+        shell: bash
+        run: python -m pip install --constraint requirements/dev.txt "$(ls dist/*.whl)[dev]"
+
+      - name: Report the solver stack
+        run: python scripts/report_solver.py
+
+      - name: Run the release suite against the wheel
         run: python scripts/run_release_tests.py
+
+      # the environment above also holds the dev extra, which could hide an
+      # undeclared runtime dependency; the smoke test installs the wheel
+      # alone into a fresh environment
+      - name: Smoke test the wheel in a clean environment
+        run: python scripts/smoke_test_wheel.py
 
   minimum-dependencies:
     name: Minimum dependencies / ${{ matrix.os }}
+    needs: build
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -93,16 +148,30 @@ jobs:
           cache: pip
           cache-dependency-path: requirements/minimum.txt
 
-      - name: Install Saw with the locked minimum dependencies
-        run: python -m pip install --constraint requirements/minimum.txt --editable ".[dev]"
+      - name: Download the built wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
 
-      - name: Run the release suite
+      - name: Install the built wheel with the locked minimum dependencies
+        shell: bash
+        run: python -m pip install --constraint requirements/minimum.txt "$(ls dist/*.whl)[dev]"
+
+      - name: Report the solver stack
+        run: python scripts/report_solver.py
+
+      - name: Run the release suite against the wheel
         run: python scripts/run_release_tests.py
+
+      - name: Smoke test the wheel with the minimum runtime dependencies
+        run: python scripts/smoke_test_wheel.py --constraint requirements/minimum.txt
 
   # ignores the locks so a new upstream release inside the declared bounds
   # shows up here before anyone regenerates requirements/dev.txt
   latest-dependencies:
     name: Latest dependencies / CPython ${{ matrix.python-version }}
+    needs: build
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -121,45 +190,21 @@ jobs:
           python-version: ${{ matrix.python-version }}
           architecture: x64
 
-      - name: Install Saw with the newest allowed dependencies
-        run: python -m pip install --upgrade ".[dev]"
-
-      - name: Run the release suite
-        run: python scripts/run_release_tests.py
-
-  built-wheel:
-    name: Build, check and test the wheel
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Check out the repository
-        uses: actions/checkout@v6
-
-      - name: Set up CPython 3.14
-        uses: actions/setup-python@v6
+      - name: Download the built wheel
+        uses: actions/download-artifact@v4
         with:
-          python-version: "3.14"
-          architecture: x64
-          cache: pip
-          cache-dependency-path: requirements/dev.txt
+          name: dist
+          path: dist/
 
-      - name: Install the locked build and check tools
-        run: python -m pip install --constraint requirements/dev.txt build packaging jsonschema
-
-      # fails on a dirty checkout, a packaging mistake, or a build that
-      # leaves anything but ignored outputs behind
-      - name: Build and check the distribution artifacts
-        run: python scripts/build_distributions.py
-
-      # installs the wheel alone into a fresh environment, so missing
-      # package data or an undeclared runtime dependency fails here
-      - name: Smoke test the wheel in a clean environment
-        run: python scripts/smoke_test_wheel.py
-
-      - name: Install the built wheel
+      - name: Install the built wheel with the newest allowed dependencies
         shell: bash
-        run: |
-          python -m pip install --constraint requirements/dev.txt "$(ls dist/*.whl)[dev]"
+        run: python -m pip install --upgrade "$(ls dist/*.whl)[dev]"
+
+      - name: Report the solver stack
+        run: python scripts/report_solver.py
 
       - name: Run the release suite against the wheel
         run: python scripts/run_release_tests.py
+
+      - name: Smoke test the wheel with the newest runtime dependencies
+        run: python scripts/smoke_test_wheel.py --unlocked
