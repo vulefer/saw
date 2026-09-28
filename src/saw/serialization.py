@@ -6,10 +6,11 @@
 from __future__ import annotations
 
 import codecs
+from collections.abc import Callable, Iterable
 import json
 import math
 import re
-from collections.abc import Callable, Iterable
+from typing import TypeVar
 
 from saw.exceptions import (
     ErrorCode,
@@ -42,6 +43,9 @@ __all__ = (
 # the only format_version accepted
 SUPPORTED_FORMAT_VERSION = 1
 
+# a stock or demand built from one json record
+_Record = TypeVar("_Record")
+
 # the exact fields each json object must have, no more and no less
 _PROBLEM_MEMBERS = frozenset({"format_version", "stocks", "demands"})
 _STOCK_MEMBERS = frozenset({"stock_id", "material_id", "length", "quantity"})
@@ -49,9 +53,7 @@ _DEMAND_MEMBERS = frozenset({"demand_id", "material_id", "length", "quantity"})
 
 # the verified plan is cut_patterns, objective_value and verification_report
 # these statuses must always include it, see docs/formats.md
-_STATUSES_REQUIRING_VERIFIED_PLAN = frozenset(
-    {SolutionStatus.OPTIMAL, SolutionStatus.FEASIBLE}
-)
+_STATUSES_REQUIRING_VERIFIED_PLAN = frozenset({SolutionStatus.OPTIMAL, SolutionStatus.FEASIBLE})
 
 # these statuses must never include it
 _STATUSES_FORBIDDING_VERIFIED_PLAN = frozenset(
@@ -80,8 +82,7 @@ def _decode_problem_bytes(data: bytes) -> str:
     # so this check catches both
     if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
         raise SerializationError(
-            "Input starts with a UTF-16 or UTF-32 byte order mark; JSON input "
-            "must be UTF-8.",
+            "Input starts with a UTF-16 or UTF-32 byte order mark; JSON input must be UTF-8.",
             code=SerializationErrorCode.INVALID_JSON,
         )
     try:
@@ -124,8 +125,7 @@ def problem_from_json(text: str) -> Problem:
             f"problem_from_json() expects str, not {type(text).__name__}; "
             "use problem_from_bytes() for undecoded input."
         )
-    payload = _load_json(text)
-    _require_object(payload, "problem")
+    payload = _require_object(_load_json(text), "problem")
     _require_exact_members(payload, _PROBLEM_MEMBERS, "problem")
     _check_format_version(payload["format_version"])
 
@@ -199,7 +199,7 @@ def _load_json(text: str) -> object:
             str(error),
             code=SerializationErrorCode.INVALID_JSON,
         ) from error
-    except RecursionError as error:
+    except RecursionError:
         # backup for _check_nesting_depth, if python still runs out of stack
         # it is bad input, not an internal error
         raise SerializationError(
@@ -221,9 +221,7 @@ def _reject_duplicate_members(pairs: Iterable[tuple[str, object]]) -> dict[str, 
 
 # used by json.loads, raises on NaN, Infinity and -Infinity which are not real json
 def _reject_non_standard_constant(constant: str) -> None:
-    raise _JsonSyntaxError(
-        f"Non-standard JSON numeric constant {constant!r} is not permitted."
-    )
+    raise _JsonSyntaxError(f"Non-standard JSON numeric constant {constant!r} is not permitted.")
 
 
 # --- Structural shape --------------------------------------------------
@@ -234,7 +232,7 @@ def _require_object(
     kind: str,
     *,
     record_index: int | None = None,
-) -> None:
+) -> dict[str, object]:
     if not isinstance(value, dict):
         raise SerializationError(
             f"{_record_label(kind, record_index)} must be a JSON object.",
@@ -242,6 +240,7 @@ def _require_object(
             record=kind,
             record_index=record_index,
         )
+    return value
 
 
 def _require_exact_members(
@@ -285,8 +284,7 @@ def _check_format_version(value: object) -> None:
         )
     if value != SUPPORTED_FORMAT_VERSION:
         raise SerializationError(
-            f"Unsupported format_version: {value}. Only "
-            f"{SUPPORTED_FORMAT_VERSION} is supported.",
+            f"Unsupported format_version: {value}. Only {SUPPORTED_FORMAT_VERSION} is supported.",
             code=SerializationErrorCode.UNSUPPORTED_FORMAT_VERSION,
             field="format_version",
         )
@@ -297,8 +295,8 @@ def _parse_records(
     array_field: str,
     record_kind: str,
     expected_members: frozenset[str],
-    build: Callable[[dict[str, object], int], object],
-) -> tuple[object, ...]:
+    build: Callable[[dict[str, object], int], _Record],
+) -> tuple[_Record, ...]:
     if not isinstance(value, list):
         raise SerializationError(
             f"{array_field} must be a JSON array.",
@@ -308,9 +306,9 @@ def _parse_records(
 
     records = []
     for index, item in enumerate(value):
-        _require_object(item, record_kind, record_index=index)
-        _require_exact_members(item, expected_members, record_kind, record_index=index)
-        records.append(build(item, index))
+        record = _require_object(item, record_kind, record_index=index)
+        _require_exact_members(record, expected_members, record_kind, record_index=index)
+        records.append(build(record, index))
     return tuple(records)
 
 
@@ -379,6 +377,8 @@ def json_from_solution(solution: Solution) -> str:
 
 def _solution_payload(solution: Solution) -> dict[str, object]:
     includes_plan = _includes_verified_plan(solution)
+    objective_value = solution.objective_value
+    report = solution.verification_report
 
     payload: dict[str, object] = {
         "format_version": SUPPORTED_FORMAT_VERSION,
@@ -386,17 +386,19 @@ def _solution_payload(solution: Solution) -> dict[str, object]:
     }
 
     if includes_plan:
+        # only narrows the types, _includes_verified_plan already raised if
+        # either one is missing
+        assert objective_value is not None and report is not None
         payload["cut_patterns"] = [
             _cut_pattern_payload(cut_pattern) for cut_pattern in solution.cut_patterns
         ]
-        payload["objective_value"] = _objective_value_payload(solution.objective_value)
+        payload["objective_value"] = _objective_value_payload(objective_value)
 
     payload["diagnostics"] = _diagnostics_payload(solution.diagnostics)
 
     if includes_plan:
-        payload["verification_report"] = _verification_report_payload(
-            solution.verification_report
-        )
+        assert report is not None
+        payload["verification_report"] = _verification_report_payload(report)
 
     return payload
 
@@ -408,7 +410,7 @@ def _includes_verified_plan(solution: Solution) -> bool:
     status = solution.solution_status
     has_report = solution.verification_report is not None
 
-    if has_report and not solution.verification_report.is_valid:
+    if solution.verification_report is not None and not solution.verification_report.is_valid:
         raise SerializationError(
             "verification_report must be valid to be attached to a "
             "published solution; an invalid report is never evidence for a "

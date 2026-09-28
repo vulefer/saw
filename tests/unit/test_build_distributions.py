@@ -8,7 +8,6 @@ import pytest
 
 from scripts import build_distributions
 
-
 PROJECT = {
     "name": "saw",
     "version": "1.0.0",
@@ -153,7 +152,13 @@ def test_invalid_metadata_fails() -> None:
 
 
 def test_the_sdist_must_hold_exactly_the_tracked_release_files(tmp_path) -> None:
-    tracked = {"pyproject.toml", "src/saw/cli.py", "tests/test_cli.py", ".gitignore", ".github/workflows/ci.yml"}
+    tracked = {
+        "pyproject.toml",
+        "src/saw/cli.py",
+        "tests/test_cli.py",
+        ".gitignore",
+        ".github/workflows/ci.yml",
+    }
     sdist = _write_sdist(
         tmp_path / "saw.tar.gz",
         {

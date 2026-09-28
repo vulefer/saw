@@ -36,9 +36,7 @@ class RecordingBackend:
     availability: BackendAvailability = field(
         default_factory=lambda: BackendAvailability(available=True)
     )
-    support: BackendSupport = field(
-        default_factory=lambda: BackendSupport(supported=True)
-    )
+    support: BackendSupport = field(default_factory=lambda: BackendSupport(supported=True))
     calls: list[str] = field(default_factory=list)
 
     @property
@@ -95,23 +93,15 @@ def _install_backend(
     backend: RecordingBackend,
 ) -> None:
     solve_module = import_module("saw.solve")
-    monkeypatch.setattr(
-        solve_module, "_BACKENDS", {"exact_enumerated": backend}
-    )
+    monkeypatch.setattr(solve_module, "_BACKENDS", {"exact_enumerated": backend})
 
 
 def _stocks(count: int) -> tuple[Stock, ...]:
-    return tuple(
-        Stock(f"stock-{index}", "steel", length=10, quantity=1)
-        for index in range(count)
-    )
+    return tuple(Stock(f"stock-{index}", "steel", length=10, quantity=1) for index in range(count))
 
 
 def _demands(count: int) -> tuple[Demand, ...]:
-    return tuple(
-        Demand(f"demand-{index}", "steel", length=5, quantity=1)
-        for index in range(count)
-    )
+    return tuple(Demand(f"demand-{index}", "steel", length=5, quantity=1) for index in range(count))
 
 
 def _assert_size_limit_result(result) -> None:
@@ -355,9 +345,7 @@ def test_size_limit_short_circuits_before_backend_availability_is_checked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     backend = RecordingBackend(
-        availability=BackendAvailability(
-            available=False, reason="should never be consulted"
-        )
+        availability=BackendAvailability(available=False, reason="should never be consulted")
     )
     _install_backend(monkeypatch, backend)
     problem = Problem(stocks=_stocks(201), demands=())

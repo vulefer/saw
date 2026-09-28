@@ -2,19 +2,13 @@ from copy import deepcopy
 import json
 from pathlib import Path
 
-import pytest
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
-
+import pytest
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 SCHEMA_PATH = REPOSITORY_ROOT / "src" / "saw" / "schemas" / "error-v1.schema.json"
-EXAMPLE_PATH = (
-    REPOSITORY_ROOT
-    / "examples"
-    / "json"
-    / "error-v1-invalid-problem.json"
-)
+EXAMPLE_PATH = REPOSITORY_ROOT / "examples" / "json" / "error-v1-invalid-problem.json"
 
 ERROR_CODES = {
     "invalid_cli_usage",
@@ -58,9 +52,7 @@ def test_schema_is_closed_and_requires_the_complete_envelope(
 def test_schema_defines_the_stable_machine_readable_codes(
     schema: dict[str, object],
 ) -> None:
-    assert set(
-        schema["$defs"]["error"]["properties"]["code"]["enum"]
-    ) == ERROR_CODES
+    assert set(schema["$defs"]["error"]["properties"]["code"]["enum"]) == ERROR_CODES
 
 
 def test_example_is_valid(validator: Draft202012Validator) -> None:
@@ -111,6 +103,4 @@ def test_unknown_missing_and_empty_members_are_rejected(
 
 
 def test_expected_solve_outcomes_are_not_error_codes() -> None:
-    assert ERROR_CODES.isdisjoint(
-        {"optimal", "feasible", "infeasible", "limit", "unsupported"}
-    )
+    assert ERROR_CODES.isdisjoint({"optimal", "feasible", "infeasible", "limit", "unsupported"})

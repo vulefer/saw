@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from typing import Any
 import venv
 
 from jsonschema import Draft202012Validator
@@ -102,7 +103,10 @@ def project_version(root: Path = REPOSITORY_ROOT) -> str:
 
 def expected_schemas(directory: Path = SCHEMA_DIRECTORY) -> dict[str, str]:
     """Return every schema the wheel must carry, by file name."""
-    return {path.name: path.read_text(encoding="utf-8") for path in sorted(directory.glob("*.schema.json"))}
+    return {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted(directory.glob("*.schema.json"))
+    }
 
 
 def find_wheel(directory: Path) -> tuple[list[str], Path | None]:
@@ -121,7 +125,7 @@ def _environment_variables() -> dict[str, str]:
     return variables
 
 
-def run(environment: Environment, *command: object) -> subprocess.CompletedProcess:
+def run(environment: Environment, *command: object) -> subprocess.CompletedProcess[str]:
     """Run *command* in the work directory with a clean interpreter environment."""
     return subprocess.run(
         [str(part) for part in command],
@@ -137,7 +141,7 @@ def run(environment: Environment, *command: object) -> subprocess.CompletedProce
     )
 
 
-def _failure(gate: str, completed: subprocess.CompletedProcess) -> str:
+def _failure(gate: str, completed: subprocess.CompletedProcess[str]) -> str:
     output = (completed.stderr or completed.stdout).strip().splitlines()
     detail = f": {output[-1]}" if output else ""
     return f"{gate}: exit code {completed.returncode}{detail}"
@@ -146,7 +150,9 @@ def _failure(gate: str, completed: subprocess.CompletedProcess) -> str:
 def create_environment(directory: Path) -> Environment:
     """Create an isolated virtual environment with pip under *directory*."""
     # no system site packages, so only what the wheel declares is importable
-    venv.EnvBuilder(with_pip=True, clear=True, system_site_packages=False).create(directory / "venv")
+    venv.EnvBuilder(with_pip=True, clear=True, system_site_packages=False).create(
+        directory / "venv"
+    )
     work = directory / "work"
     work.mkdir()
     return Environment(root=(directory / "venv").resolve(), work=work.resolve())
@@ -162,7 +168,7 @@ def install_wheel(environment: Environment, wheel: Path, *pip_options: str) -> l
     return [] if completed.returncode == 0 else [_failure("install: pip check", completed)]
 
 
-def probe_package(environment: Environment) -> tuple[dict | None, list[str]]:
+def probe_package(environment: Environment) -> tuple[dict[str, Any] | None, list[str]]:
     """Import every installed saw module and collect its package data."""
     # -I leaves the work directory, the user site and PYTHON* variables out of sys.path
     completed = run(environment, environment.python, "-I", "-c", PROBE)
@@ -171,9 +177,13 @@ def probe_package(environment: Environment) -> tuple[dict | None, list[str]]:
     return json.loads(completed.stdout), []
 
 
-def check_package(report: dict, environment: Environment, version: str, schemas: dict[str, str]) -> list[str]:
+def check_package(
+    report: dict[str, Any], environment: Environment, version: str, schemas: dict[str, str]
+) -> list[str]:
     """Check that saw imports from the environment and carries its data."""
-    problems = [f"package: cannot import {name}: {error}" for name, error in report["import_errors"].items()]
+    problems = [
+        f"package: cannot import {name}: {error}" for name, error in report["import_errors"].items()
+    ]
     if "location" not in report:
         return problems
 
@@ -297,7 +307,9 @@ def smoke_test(wheel: Path, pip_options: tuple[str, ...], directory: Path) -> li
 def main(argv: list[str] | None = None) -> int:
     """Smoke test the built wheel and fail on any broken gate."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--wheel", type=Path, help="the wheel to test (default: the one saw wheel in dist/)")
+    parser.add_argument(
+        "--wheel", type=Path, help="the wheel to test (default: the one saw wheel in dist/)"
+    )
     parser.add_argument(
         "--constraint",
         type=Path,
@@ -313,13 +325,16 @@ def main(argv: list[str] | None = None) -> int:
     if wheel is not None:
         # the temporary directory is outside the checkout, so nothing can be
         # imported from the source tree by accident
-        with tempfile.TemporaryDirectory(prefix="saw-wheel-smoke-", ignore_cleanup_errors=True) as directory:
+        with tempfile.TemporaryDirectory(
+            prefix="saw-wheel-smoke-", ignore_cleanup_errors=True
+        ) as directory:
             options = ("--constraint", str(arguments.constraint.resolve()))
             problems += smoke_test(wheel, options, Path(directory))
 
     for problem in problems:
         print(f"error: {problem}", file=sys.stderr)
-    if problems:
+    # find_wheel reports a missing wheel as a problem
+    if problems or wheel is None:
         return 1
     print(f"ok: {wheel.name} installs and works in a clean environment")
     return 0

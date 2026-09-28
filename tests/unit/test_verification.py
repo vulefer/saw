@@ -1,7 +1,5 @@
 import pytest
 
-import saw.patterns as pattern_helpers
-import saw.verification as verification_module
 from saw import verify_solution as public_verify_solution
 from saw.models import (
     BackendStatus,
@@ -17,7 +15,9 @@ from saw.models import (
     VerificationFindingCode,
     VerificationReport,
 )
+import saw.patterns as pattern_helpers
 from saw.patterns import Pattern
+import saw.verification as verification_module
 from saw.verification import verify_solution
 
 
@@ -60,9 +60,7 @@ def _make_solution(*cut_patterns: CutPattern) -> Solution:
         solution_status=SolutionStatus.FEASIBLE,
         cut_patterns=cut_patterns,
         objective_value=ObjectiveValue(
-            stock_piece_count=sum(
-                cut_pattern.repetitions for cut_pattern in cut_patterns
-            ),
+            stock_piece_count=sum(cut_pattern.repetitions for cut_pattern in cut_patterns),
             total_leftover=0,
             distinct_pattern_count=len(cut_patterns),
         ),
@@ -83,9 +81,7 @@ def _verify_without_demand_production(
     report = verify_solution(problem, solution)
     return VerificationReport(
         findings=tuple(
-            finding
-            for finding in report.findings
-            if finding.code not in later_verification_codes
+            finding for finding in report.findings if finding.code not in later_verification_codes
         )
     )
 
@@ -143,9 +139,7 @@ def test_invalid_repetition_counts_are_reported(repetitions: object) -> None:
     report = _verify_without_demand_production(_make_problem(), solution)
 
     assert len(report.findings) == 1
-    assert report.findings[0].code is (
-        VerificationFindingCode.NON_POSITIVE_REPETITIONS
-    )
+    assert report.findings[0].code is (VerificationFindingCode.NON_POSITIVE_REPETITIONS)
     assert report.findings[0].stock_id == "stock-10"
     assert report.findings[0].pattern_index == 0
 
@@ -589,9 +583,7 @@ def test_overproduced_demand_is_reported() -> None:
         "demand-6",
         "demand-4",
     ]
-    assert all(
-        "requires quantity 3" in finding.message for finding in findings
-    )
+    assert all("requires quantity 3" in finding.message for finding in findings)
     assert all("patterns produce 4" in finding.message for finding in findings)
     assert all("overproduced by 1" in finding.message for finding in findings)
 
@@ -648,10 +640,13 @@ def test_leftover_follows_the_specification_for_every_pattern_use() -> None:
         CutPattern(Pattern("stock-12", {"demand-6": 1}), repetitions=0),
     )
 
-    assert verification_module._calculate_leftover(
-        _make_problem(),
-        solution,
-    ) == 16
+    assert (
+        verification_module._calculate_leftover(
+            _make_problem(),
+            solution,
+        )
+        == 16
+    )
 
 
 def test_distinct_count_uses_canonical_positive_pattern_identity() -> None:
@@ -731,10 +726,13 @@ def test_missing_objective_value_adds_no_objective_finding() -> None:
         diagnostics=original.diagnostics,
     )
 
-    assert verification_module._check_objective_components(
-        _make_problem(),
-        solution,
-    ) == []
+    assert (
+        verification_module._check_objective_components(
+            _make_problem(),
+            solution,
+        )
+        == []
+    )
 
 
 def test_boolean_reported_objective_is_not_accepted_as_integer() -> None:

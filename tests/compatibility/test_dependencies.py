@@ -45,9 +45,7 @@ def _lock_pins(name: str) -> dict[str, set[Version]]:
         requirement = Requirement(line)
         (specifier,) = requirement.specifier
         assert specifier.operator == "==", line
-        pins.setdefault(canonicalize_name(requirement.name), set()).add(
-            Version(specifier.version)
-        )
+        pins.setdefault(canonicalize_name(requirement.name), set()).add(Version(specifier.version))
     return pins
 
 

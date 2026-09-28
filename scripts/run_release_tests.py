@@ -4,7 +4,6 @@ from pathlib import Path
 import subprocess
 import sys
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 RELEASE_TEST_PATHS = (
     "tests/unit",

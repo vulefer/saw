@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from saw import Demand, Problem, Stock
-
 from tests.oracle import OracleObjective, solve_small_instance
 
 

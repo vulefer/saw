@@ -17,9 +17,10 @@ from saw import (
     VerificationFinding,
     VerificationFindingCode,
     VerificationReport,
-    VerificationResult
+    VerificationResult,
 )
 from saw.patterns import Pattern
+
 
 def test_stock_exposes_domain_values_directly() -> None:
     stock = Stock("stock-10", "steel", 10, 2)
@@ -43,7 +44,7 @@ def test_demand_exposes_domain_values_directly() -> None:
     ("model", "field_name", "new_value"),
     [
         (Stock("stock-10", "steel", 10, 2), "length", 12),
-        (Demand("demand-6", "steel", 6, 3), "quantity", 4)
+        (Demand("demand-6", "steel", 6, 3), "quantity", 4),
     ],
 )
 def test_models_cannot_be_mutated(model: object, field_name: str, new_value: object) -> None:
@@ -186,9 +187,7 @@ def test_diagnostics_exposes_structured_solver_information() -> None:
 
     assert diagnostics.termination_reason is TerminationReason.TIME_LIMIT
     assert diagnostics.backend_status is BackendStatus.LIMIT_REACHED
-    assert diagnostics.completed_objective_stages == (
-        ObjectiveStage.STOCK_PIECE_COUNT,
-    )
+    assert diagnostics.completed_objective_stages == (ObjectiveStage.STOCK_PIECE_COUNT,)
     assert isinstance(diagnostics.elapsed_time, float)
 
 

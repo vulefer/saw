@@ -36,6 +36,8 @@ and nothing else:
 | packaging | `>=24,<27` | Parses requirements and versions in the dependency policy tests. |
 | tomli | `>=2.0.1,<3` (Python 3.10 only) | Reads `pyproject.toml` where `tomllib` is not available. |
 | build | `>=1.2.1,<2` | Builds the sdist and wheel in `scripts/build_distributions.py`. |
+| ruff | `>=0.16.9,<0.17` | Formats and lints in `scripts/run_static_checks.py`. Ruff changes its formatter style and rules between 0.x minor releases, so the upper bound is the next minor. |
+| mypy | `>=2.3.1,<3` | Type checks `src/saw`, `scripts/` and `examples/` in `scripts/run_static_checks.py`. |
 
 The library never imports these packages.
 

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from collections.abc import Mapping
 
 from saw.patterns import Pattern
+
 
 @dataclass(frozen=True, slots=True)
 class Stock:
@@ -13,6 +14,7 @@ class Stock:
     length: int
     quantity: int
 
+
 @dataclass(frozen=True, slots=True)
 class Demand:
     demand_id: str
@@ -20,10 +22,10 @@ class Demand:
     length: int
     quantity: int
 
+
 @dataclass(frozen=True, slots=True)
 class Problem:
-
-    #tuple[x,...] = zero-or-more x instances
+    # tuple[x,...] = zero-or-more x instances
     stocks: tuple[Stock, ...]
     demands: tuple[Demand, ...]
 
@@ -32,6 +34,7 @@ class Problem:
         # changes to the caller's list dont change the problem
         object.__setattr__(self, "stocks", tuple(self.stocks))
         object.__setattr__(self, "demands", tuple(self.demands))
+
 
 @dataclass(frozen=True, slots=True)
 class CutPattern:
@@ -46,14 +49,16 @@ class CutPattern:
     def piece_counts(self) -> Mapping[str, int]:
         return self.pattern.piece_counts
 
+
 # what saw can claim about the final result after the verification and proof checks
 class SolutionStatus(str, Enum):
-    OPTIMAL = 'optimal'
-    FEASIBLE = 'feasible'
-    INFEASIBLE = 'infeasible'
-    LIMIT = 'limit'
-    UNSUPPORTED = 'unsupported'
-    ERROR = 'error'
+    OPTIMAL = "optimal"
+    FEASIBLE = "feasible"
+    INFEASIBLE = "infeasible"
+    LIMIT = "limit"
+    UNSUPPORTED = "unsupported"
+    ERROR = "error"
+
 
 # structured reason why the solving process stopped
 class TerminationReason(str, Enum):
@@ -73,6 +78,7 @@ class TerminationReason(str, Enum):
     UNKNOWN_BACKEND_STATUS = "unknown_backend_status"
     INTERNAL_ERROR = "internal_error"
 
+
 # backend's outcome before saw verifies and translates it
 class BackendStatus(str, Enum):
     NOT_RUN = "not_run"
@@ -85,17 +91,20 @@ class BackendStatus(str, Enum):
     FAILED = "failed"
     UNKNOWN = "unknown"
 
+
 # a named step in saw's lexicographic optimization sequence
 class ObjectiveStage(str, Enum):
     STOCK_PIECE_COUNT = "stock_piece_count"
     TOTAL_LEFTOVER = "total_leftover"
     DISTINCT_PATTERN_COUNT = "distinct_pattern_count"
 
+
 @dataclass(frozen=True, slots=True)
 class ObjectiveValue:
     stock_piece_count: int
     total_leftover: int
     distinct_pattern_count: int
+
 
 @dataclass(frozen=True, slots=True)
 class Diagnostics:
@@ -113,6 +122,7 @@ class Diagnostics:
     backend_id: str | None = None
     backend_version: str | None = None
 
+
 @dataclass(frozen=True, slots=True)
 class Solution:
     solution_status: SolutionStatus
@@ -124,10 +134,12 @@ class Solution:
     def __post_init__(self) -> None:
         object.__setattr__(self, "cut_patterns", tuple(self.cut_patterns))
 
+
 # represents the result of solution verification
 class VerificationResult(str, Enum):
     VALID = "valid"
     INVALID = "invalid"
+
 
 # enum with every verification failure
 class VerificationFindingCode(str, Enum):
@@ -144,6 +156,7 @@ class VerificationFindingCode(str, Enum):
     DEMAND_OVERPRODUCED = "demand_overproduced"
     OBJECTIVE_MISMATCH = "objective_mismatch"
 
+
 # represents one specific problem found during verification
 @dataclass(frozen=True, slots=True)
 class VerificationFinding:
@@ -152,6 +165,7 @@ class VerificationFinding:
     stock_id: str | None = None
     demand_id: str | None = None
     pattern_index: int | None = None
+
 
 # collects all of the problems found during the verification
 @dataclass(frozen=True, slots=True)

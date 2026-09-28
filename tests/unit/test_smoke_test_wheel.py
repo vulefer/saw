@@ -2,8 +2,9 @@ from pathlib import Path
 
 from scripts import smoke_test_wheel
 
-
-SCHEMAS = {"problem-v1.schema.json": '{"$schema": "https://json-schema.org/draft/2020-12/schema"}\n'}
+SCHEMAS = {
+    "problem-v1.schema.json": '{"$schema": "https://json-schema.org/draft/2020-12/schema"}\n'
+}
 
 
 def _environment(tmp_path) -> smoke_test_wheel.Environment:
@@ -23,13 +24,17 @@ def _report(tmp_path, **changes) -> dict:
 
 
 def test_a_complete_installation_passes(tmp_path) -> None:
-    problems = smoke_test_wheel.check_package(_report(tmp_path), _environment(tmp_path), "1.0.0", SCHEMAS)
+    problems = smoke_test_wheel.check_package(
+        _report(tmp_path), _environment(tmp_path), "1.0.0", SCHEMAS
+    )
 
     assert problems == []
 
 
 def test_an_undeclared_dependency_fails(tmp_path) -> None:
-    report = _report(tmp_path, import_errors={"saw.cli": "ModuleNotFoundError: No module named 'rich'"})
+    report = _report(
+        tmp_path, import_errors={"saw.cli": "ModuleNotFoundError: No module named 'rich'"}
+    )
 
     assert smoke_test_wheel.check_package(report, _environment(tmp_path), "1.0.0", SCHEMAS) == [
         "package: cannot import saw.cli: ModuleNotFoundError: No module named 'rich'"
@@ -47,7 +52,14 @@ def test_missing_package_data_fails(tmp_path) -> None:
 
 def test_stale_or_unversioned_schemas_fail(tmp_path) -> None:
     schemas = {**SCHEMAS, "error-v1.schema.json": "{}\n"}
-    report = _report(tmp_path, schemas={"problem-v1.schema.json": "{}\n", "error-v1.schema.json": "{}\n", "x.schema.json": "{}"})
+    report = _report(
+        tmp_path,
+        schemas={
+            "problem-v1.schema.json": "{}\n",
+            "error-v1.schema.json": "{}\n",
+            "x.schema.json": "{}",
+        },
+    )
 
     assert smoke_test_wheel.check_package(report, _environment(tmp_path), "1.0.0", schemas) == [
         "schemas: unexpected x.schema.json",
@@ -79,7 +91,9 @@ def test_find_wheel_needs_exactly_one_wheel(tmp_path) -> None:
     assert problems[0].startswith("more than one saw wheel")
 
 
-def test_a_missing_wheel_fails_without_building_an_environment(monkeypatch, tmp_path, capsys) -> None:
+def test_a_missing_wheel_fails_without_building_an_environment(
+    monkeypatch, tmp_path, capsys
+) -> None:
     monkeypatch.setattr(smoke_test_wheel, "DIST_DIRECTORY", Path(tmp_path))
 
     assert smoke_test_wheel.main([]) == 1

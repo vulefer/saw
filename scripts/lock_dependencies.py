@@ -4,7 +4,6 @@ from pathlib import Path
 import subprocess
 import sys
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 LOCK_COMMAND = "python scripts/lock_dependencies.py"
 
@@ -23,15 +22,24 @@ def main() -> int:
     for output, extra_args in LOCKS.items():
         completed = subprocess.run(
             [
-                sys.executable, "-m", "uv", "pip", "compile", "pyproject.toml",
-                "--extra", "dev",
+                sys.executable,
+                "-m",
+                "uv",
+                "pip",
+                "compile",
+                "pyproject.toml",
+                "--extra",
+                "dev",
                 "--universal",
-                "--python-version", "3.10",
-                "--custom-compile-command", LOCK_COMMAND,
+                "--python-version",
+                "3.10",
+                "--custom-compile-command",
+                LOCK_COMMAND,
                 "--quiet",
                 *extra_args,
                 *sys.argv[1:],
-                "--output-file", output,
+                "--output-file",
+                output,
             ],
             cwd=REPOSITORY_ROOT,
             check=False,

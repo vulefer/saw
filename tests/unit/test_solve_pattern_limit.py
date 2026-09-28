@@ -77,11 +77,5 @@ def test_pattern_limit_hit_is_deterministic_across_repeated_solves() -> None:
     second = solve(problem, SolveOptions(pattern_limit=2))
 
     assert first.solution_status == second.solution_status
-    assert (
-        first.diagnostics.termination_reason
-        == second.diagnostics.termination_reason
-    )
-    assert (
-        first.diagnostics.patterns_generated
-        == second.diagnostics.patterns_generated
-    )
+    assert first.diagnostics.termination_reason == second.diagnostics.termination_reason
+    assert first.diagnostics.patterns_generated == second.diagnostics.patterns_generated

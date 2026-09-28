@@ -29,11 +29,11 @@ class Pattern:
             if count < 0:
                 raise ValueError(f"Negative piece count for demand {demand_id!r}")
 
-        normalized_counts = tuple(sorted(
-            (demand_id, count)
-            for demand_id, count in self.piece_counts.items()
-            if count > 0
-        ))
+        normalized_counts = tuple(
+            sorted(
+                (demand_id, count) for demand_id, count in self.piece_counts.items() if count > 0
+            )
+        )
         object.__setattr__(self, "_normalized_counts", normalized_counts)
         object.__setattr__(
             self,
@@ -60,9 +60,7 @@ def _iter_patterns_for_single_stock(
 ) -> Iterator[Pattern]:
     # keeps only the demands with the same material as the stock
     compatible_demands = tuple(
-        demand
-        for demand in demands
-        if demand.material_id == stock.material_id
+        demand for demand in demands if demand.material_id == stock.material_id
     )
 
     counts = [0] * len(compatible_demands)
@@ -75,7 +73,7 @@ def _iter_patterns_for_single_stock(
             if any(counts):
                 piece_counts = {
                     demand.demand_id: count
-                    for demand, count in zip(compatible_demands, counts)
+                    for demand, count in zip(compatible_demands, counts, strict=True)
                     if count > 0
                 }
                 yield Pattern(stock.stock_id, piece_counts)

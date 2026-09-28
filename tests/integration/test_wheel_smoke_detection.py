@@ -13,7 +13,6 @@ import pytest
 
 from scripts import smoke_test_wheel
 
-
 DIST_INFO = "saw-1.0.0.dist-info"
 SCHEMAS = smoke_test_wheel.expected_schemas()
 METADATA = b"Metadata-Version: 2.1\nName: saw\nVersion: 1.0.0\n"
@@ -57,7 +56,10 @@ def probe(environment, tmp_path):
     def probe(package: dict[str, bytes]) -> list[str]:
         wheel = _write_wheel(tmp_path, package)
         # the fake wheel declares no dependencies, so it installs offline
-        assert smoke_test_wheel.install_wheel(environment, wheel, "--no-index", "--force-reinstall") == []
+        assert (
+            smoke_test_wheel.install_wheel(environment, wheel, "--no-index", "--force-reinstall")
+            == []
+        )
         report, problems = smoke_test_wheel.probe_package(environment)
         assert problems == []
         return smoke_test_wheel.check_package(report, environment, "1.0.0", SCHEMAS)

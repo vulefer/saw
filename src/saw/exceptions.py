@@ -1,6 +1,7 @@
-'''exceptions raised by saw'''
+"""exceptions raised by saw"""
 
 from __future__ import annotations
+
 from enum import Enum
 
 
@@ -10,7 +11,6 @@ class SawError(Exception):
 
 
 class ValidationErrorCode(str, Enum):
-
     INVALID_PROBLEM = "invalid_problem"
     INVALID_STOCK_ID = "invalid_stock_id"
     INVALID_STOCK_MATERIAL_ID = "invalid_stock_material_id"
@@ -47,7 +47,7 @@ class ValidationError(SawError):
 class SerializationErrorCode(str, Enum):
     # why reading a problem json failed, codes explained in docs/formats.md "Error codes"
 
-    INVALID_JSON = "invalid_json" # -> 
+    INVALID_JSON = "invalid_json"  # ->
     UNSUPPORTED_FORMAT_VERSION = "unsupported_format_version"
     SCHEMA_VIOLATION = "schema_violation"
     SEMANTIC_VALIDATION = "semantic_validation"

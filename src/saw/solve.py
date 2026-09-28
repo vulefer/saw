@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+import math
 from time import perf_counter
 
 from saw.backends.base import (
@@ -58,14 +58,17 @@ _BACKENDS: dict[str, OptimizationBackend] = {
 def _validate_solve_options(options: SolveOptions) -> None:
     _require_backend_identifier(options.backend)
     _require_optional_finite_positive_number(
-        options.time_limit_seconds, "time_limit_seconds",
+        options.time_limit_seconds,
+        "time_limit_seconds",
     )
     _require_optional_positive_integer(options.pattern_limit, "pattern_limit")
     _require_optional_positive_integer(
-        options.problem_size_limit, "problem_size_limit",
+        options.problem_size_limit,
+        "problem_size_limit",
     )
     _require_optional_positive_integer(
-        options.numeric_magnitude_limit, "numeric_magnitude_limit",
+        options.numeric_magnitude_limit,
+        "numeric_magnitude_limit",
     )
 
 
@@ -88,8 +91,7 @@ def _require_optional_finite_positive_number(value: object, field: str) -> None:
         or value <= 0
     ):
         raise InvalidSolveOptionsError(
-            f"Invalid {field} {value!r}: must be a finite real number "
-            "greater than zero, or None."
+            f"Invalid {field} {value!r}: must be a finite real number greater than zero, or None."
         )
 
 
@@ -100,8 +102,7 @@ def _require_optional_positive_integer(value: object, field: str) -> None:
         return
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise InvalidSolveOptionsError(
-            f"Invalid {field} {value!r}: must be a positive integer, or "
-            "None."
+            f"Invalid {field} {value!r}: must be a positive integer, or None."
         )
 
 
@@ -115,8 +116,7 @@ def _select_backend(
     except KeyError:
         available_ids = ", ".join(sorted(backends))
         raise InvalidSolveOptionsError(
-            f"Unknown backend {backend_id!r}. "
-            f"Available backends: {available_ids}."
+            f"Unknown backend {backend_id!r}. Available backends: {available_ids}."
         ) from None
 
 
@@ -142,13 +142,9 @@ def _to_public_solution(
     candidate = result.candidate
 
     return Solution(
-        solution_status=translate_backend_status(
-            result.diagnostics.backend_status
-        ),
+        solution_status=translate_backend_status(result.diagnostics.backend_status),
         cut_patterns=(candidate.cut_patterns if candidate is not None else ()),
-        objective_value=(
-            candidate.objective_value if candidate is not None else None
-        ),
+        objective_value=(candidate.objective_value if candidate is not None else None),
         # added here instead of in the backend, since solve() is the one place
         # that knows them from check_availability()
         diagnostics=replace(
@@ -197,13 +193,9 @@ def _exceeds_problem_size_limit(problem: Problem, limit: int | None) -> bool:
 def _exceeds_numeric_magnitude_limit(problem: Problem, limit: int | None) -> bool:
     if limit is None:
         return False
-    for stock in problem.stocks:
-        if stock.length > limit or stock.quantity > limit:
-            return True
-    for demand in problem.demands:
-        if demand.length > limit or demand.quantity > limit:
-            return True
-    return False
+    return any(stock.length > limit or stock.quantity > limit for stock in problem.stocks) or any(
+        demand.length > limit or demand.quantity > limit for demand in problem.demands
+    )
 
 
 # result when a size limit is hit, the backend never ran so there is no candidate
@@ -280,7 +272,9 @@ def solve(
     backend = _select_backend(effective_options.backend, _BACKENDS)
 
     size_limit_solution = _check_preflight_size_limits(
-        problem, effective_options, started_at,
+        problem,
+        effective_options,
+        started_at,
     )
     if size_limit_solution is not None:
         return size_limit_solution
@@ -295,8 +289,7 @@ def solve(
     availability = backend.check_availability()
     if not availability.available:
         raise BackendUnavailableError(
-            availability.reason
-            or f"Backend {backend.backend_id!r} is unavailable."
+            availability.reason or f"Backend {backend.backend_id!r} is unavailable."
         )
 
     support = backend.check_support(problem, backend_options)
@@ -325,30 +318,21 @@ def solve(
         BackendStatus.LIMIT_REACHED,
     }
 
-    if (
-        backend_status in statuses_requiring_candidate
-        and result.candidate is None
-    ):
+    if backend_status in statuses_requiring_candidate and result.candidate is None:
         raise InternalVerificationError(
             f"Backend reported {backend_status.value!r} without a candidate."
         )
 
     # nothing to verify, e.g. infeasible or a limit without a candidate
-    if (
-        result.candidate is None
-        or backend_status not in statuses_requiring_verification
-    ):
+    if result.candidate is None or backend_status not in statuses_requiring_verification:
         return unverified_solution
 
     # any finding means the answer is not trusted and is never returned
     verification_report = verify_solution(problem, unverified_solution)
     if not verification_report.is_valid:
-        finding_codes = ", ".join(
-            finding.code.value for finding in verification_report.findings
-        )
+        finding_codes = ", ".join(finding.code.value for finding in verification_report.findings)
         raise InternalVerificationError(
-            "The backend result failed independent verification: "
-            f"{finding_codes}."
+            f"The backend result failed independent verification: {finding_codes}."
         )
 
     return replace(

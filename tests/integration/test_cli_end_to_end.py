@@ -22,19 +22,18 @@ format alone that shares no code with ``saw.verification``.
 
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import dataclass
 import json
 import os
+from pathlib import Path
 import shutil
 import subprocess
 import sys
 import sysconfig
-from collections import Counter
-from dataclasses import dataclass
-from pathlib import Path
 
-import pytest
 from jsonschema import Draft202012Validator
-
+import pytest
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 SCHEMA_DIRECTORY = REPOSITORY_ROOT / "src" / "saw" / "schemas"
@@ -148,7 +147,8 @@ def _process_environment(fault: str | None) -> dict[str, str]:
     stream encoding bug cannot be hidden by the test runner's settings.
     """
     env = {
-        key: value for key, value in os.environ.items()
+        key: value
+        for key, value in os.environ.items()
         if key not in ("PYTHONUTF8", "PYTHONIOENCODING", "SAW_TEST_FAULT")
     }
     if fault is not None:
@@ -220,9 +220,7 @@ def run_saw(saw_executable, validators, tmp_path):
             expected_exit_code = ERROR_CODE_EXIT_CODES[document["error"]["code"]]
             # Every error envelope is mirrored as a one-line human
             # diagnostic on standard error.
-            assert any(
-                line.startswith("saw: error: ") for line in stderr.splitlines()
-            ), stderr
+            assert any(line.startswith("saw: error: ") for line in stderr.splitlines()), stderr
         else:
             expected_exit_code = SOLUTION_STATUS_EXIT_CODES[document["solution_status"]]
         assert completed.returncode == expected_exit_code, (document, stderr)
@@ -305,17 +303,14 @@ def _independent_findings(problem: dict, solution: dict) -> list[str]:
         if not pattern["piece_counts"]:
             findings.append(f"{label}: cuts no pieces")
         if used_length > stock["length"]:
-            findings.append(
-                f"{label}: uses {used_length} mm of a {stock['length']} mm stock"
-            )
+            findings.append(f"{label}: uses {used_length} mm of a {stock['length']} mm stock")
         stock_used[stock["stock_id"]] += repetitions
         total_leftover += (stock["length"] - used_length) * repetitions
 
     for stock_id, used in stock_used.items():
         if used > stocks[stock_id]["quantity"]:
             findings.append(
-                f"stock {stock_id!r}: {used} pieces used, "
-                f"{stocks[stock_id]['quantity']} available"
+                f"stock {stock_id!r}: {used} pieces used, {stocks[stock_id]['quantity']} available"
             )
     for demand_id, demand in demands.items():
         if produced[demand_id] != demand["quantity"]:
@@ -351,25 +346,31 @@ def test_file_input_produces_the_documented_verified_solution(run_saw) -> None:
     assert run.exit_code == 0
     assert run.stderr == ""
     documented = json.loads(DOCUMENTED_SOLUTION.read_text(encoding="utf-8"))
-    for key in ("format_version", "solution_status", "cut_patterns",
-                "objective_value", "verification_report"):
+    for key in (
+        "format_version",
+        "solution_status",
+        "cut_patterns",
+        "objective_value",
+        "verification_report",
+    ):
         assert run.document[key] == documented[key], key
     _assert_independently_verified(
-        json.loads(DOCUMENTED_PROBLEM.read_text(encoding="utf-8")), run.document,
+        json.loads(DOCUMENTED_PROBLEM.read_text(encoding="utf-8")),
+        run.document,
     )
 
 
 @pytest.mark.parametrize(
-    "argv", [["solve", "-"], ["solve"]], ids=["dash", "no-path"],
+    "argv",
+    [["solve", "-"], ["solve"]],
+    ids=["dash", "no-path"],
 )
 def test_standard_input_gives_the_same_result_as_file_input(run_saw, argv) -> None:
     from_file = run_saw(["solve", str(DOCUMENTED_PROBLEM)])
     from_stdin = run_saw(argv, stdin=DOCUMENTED_PROBLEM.read_bytes())
 
     assert from_stdin.exit_code == 0
-    assert _without_elapsed_time(from_stdin.document) == _without_elapsed_time(
-        from_file.document
-    )
+    assert _without_elapsed_time(from_stdin.document) == _without_elapsed_time(from_file.document)
 
 
 def test_standard_input_accepts_a_utf8_byte_order_mark(run_saw) -> None:
@@ -428,7 +429,6 @@ def _problem_bytes(*, format_version: int = 1, stock_length: int = 10) -> bytes:
     return json.dumps(problem).encode("utf-8")
 
 
-
 @pytest.mark.parametrize(
     ("argv", "stdin", "expected_code"),
     [
@@ -448,14 +448,27 @@ def _problem_bytes(*, format_version: int = 1, stock_length: int = 10) -> bytes:
         (["solve"], _problem_bytes(stock_length=-10), "invalid_problem"),
     ],
     ids=[
-        "unknown-option", "non-numeric-limit", "rejected-limit", "unknown-backend",
-        "missing-command", "empty", "malformed", "duplicate-member", "utf-16",
-        "non-utf-8", "nan-constant", "deep-nesting", "format-version-2",
+        "unknown-option",
+        "non-numeric-limit",
+        "rejected-limit",
+        "unknown-backend",
+        "missing-command",
+        "empty",
+        "malformed",
+        "duplicate-member",
+        "utf-16",
+        "non-utf-8",
+        "nan-constant",
+        "deep-nesting",
+        "format-version-2",
         "negative-length",
     ],
 )
 def test_invalid_invocation_or_input_exits_2_with_an_error_envelope(
-    run_saw, argv, stdin, expected_code,
+    run_saw,
+    argv,
+    stdin,
+    expected_code,
 ) -> None:
     # A valid problem accompanies the usage errors, so only the invocation
     # itself can be what is rejected.
@@ -474,7 +487,8 @@ def test_invalid_invocation_or_input_exits_2_with_an_error_envelope(
 
 
 def test_missing_input_file_exits_74_without_leaking_the_path(
-    run_saw, tmp_path,
+    run_saw,
+    tmp_path,
 ) -> None:
     missing = tmp_path / "missing-problem.json"
 
@@ -513,7 +527,10 @@ def test_proved_infeasibility_exits_3_without_a_plan(run_saw) -> None:
     ids=["problem-size", "numeric-magnitude", "pattern", "time"],
 )
 def test_a_reached_limit_exits_4_without_a_mathematical_claim(
-    run_saw, flags, termination_reason, patterns_generated,
+    run_saw,
+    flags,
+    termination_reason,
+    patterns_generated,
 ) -> None:
     run = run_saw(["solve", *flags, str(DOCUMENTED_PROBLEM)])
 
@@ -538,7 +555,8 @@ def test_disabling_a_limit_with_none_restores_the_verified_optimum(run_saw) -> N
     assert limited.exit_code == 4
     assert unlimited.exit_code == 0
     _assert_independently_verified(
-        json.loads(DOCUMENTED_PROBLEM.read_text(encoding="utf-8")), unlimited.document,
+        json.loads(DOCUMENTED_PROBLEM.read_text(encoding="utf-8")),
+        unlimited.document,
     )
 
 
@@ -622,7 +640,8 @@ def test_internal_failures_exit_70_without_a_plan(run_saw, fault, expected) -> N
 def test_traceback_flag_adds_the_traceback_to_stderr_only(run_saw) -> None:
     run = run_saw(
         ["solve", "--traceback", str(DOCUMENTED_PROBLEM)],
-        fault="internal-exception", expect_traceback=True,
+        fault="internal-exception",
+        expect_traceback=True,
     )
 
     assert run.exit_code == 70
@@ -649,13 +668,15 @@ def test_a_closed_standard_input_exits_74(saw_executable, tmp_path) -> None:
     # A parent with no standard input at all: the child inherits a closed
     # descriptor 0, which Python exposes as sys.stdin being None.
     parent = (
-        "import os, subprocess, sys; os.close(0); "
-        "sys.exit(subprocess.run(sys.argv[1:]).returncode)"
+        "import os, subprocess, sys; os.close(0); sys.exit(subprocess.run(sys.argv[1:]).returncode)"
     )
     completed = subprocess.run(
         [sys.executable, "-c", parent, saw_executable, "solve", "-"],
-        capture_output=True, cwd=tmp_path, env=_process_environment(None),
-        timeout=120, check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        env=_process_environment(None),
+        timeout=120,
+        check=False,
     )
 
     assert completed.returncode == 74, completed.stderr
@@ -688,7 +709,9 @@ def test_an_unwritable_standard_output_exits_74_without_shutdown_noise(
     try:
         process = start_saw(
             ["solve", str(DOCUMENTED_PROBLEM)],
-            stdin=subprocess.DEVNULL, stdout=write_end, stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            stdout=write_end,
+            stderr=subprocess.PIPE,
         )
     finally:
         os.close(write_end)
@@ -710,12 +733,18 @@ def test_an_unwritable_standard_output_exits_74_without_shutdown_noise(
     ids=["success", "usage-error", "input-read-error"],
 )
 def test_an_unwritable_standard_error_never_changes_the_outcome(
-    start_saw, validators, argv, expected_exit_code,
+    start_saw,
+    validators,
+    argv,
+    expected_exit_code,
 ) -> None:
     write_end = _closed_pipe_write_end()
     try:
         process = start_saw(
-            argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=write_end,
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=write_end,
         )
     finally:
         os.close(write_end)
@@ -730,8 +759,11 @@ def test_an_unwritable_standard_error_never_changes_the_outcome(
 
 def test_an_interrupt_exits_130_with_a_one_line_note(start_saw) -> None:
     process = start_saw(
-        ["solve", str(DOCUMENTED_PROBLEM)], fault="keyboard-interrupt",
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        ["solve", str(DOCUMENTED_PROBLEM)],
+        fault="keyboard-interrupt",
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
     stdout, stderr = process.communicate(timeout=120)
 

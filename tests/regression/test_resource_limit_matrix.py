@@ -61,7 +61,6 @@ from saw.models import (
     TerminationReason,
 )
 
-
 # --- shared fakes ------------------------------------------------------------
 
 
@@ -112,9 +111,7 @@ class RecordingBackend:
     availability: BackendAvailability = field(
         default_factory=lambda: BackendAvailability(available=True)
     )
-    support: BackendSupport = field(
-        default_factory=lambda: BackendSupport(supported=True)
-    )
+    support: BackendSupport = field(default_factory=lambda: BackendSupport(supported=True))
     calls: list[str] = field(default_factory=list)
     received_options: BackendOptions | None = None
 
@@ -184,17 +181,11 @@ def _patch_clock(monkeypatch: pytest.MonkeyPatch, clock: FakeClock) -> None:
 
 
 def _stocks(count: int) -> tuple[Stock, ...]:
-    return tuple(
-        Stock(f"stock-{index}", "steel", length=10, quantity=1)
-        for index in range(count)
-    )
+    return tuple(Stock(f"stock-{index}", "steel", length=10, quantity=1) for index in range(count))
 
 
 def _demands(count: int) -> tuple[Demand, ...]:
-    return tuple(
-        Demand(f"demand-{index}", "steel", length=5, quantity=1)
-        for index in range(count)
-    )
+    return tuple(Demand(f"demand-{index}", "steel", length=5, quantity=1) for index in range(count))
 
 
 def _multi_pattern_problem() -> Problem:
@@ -260,18 +251,18 @@ def test_problem_size_limit_disabled_or_overridden(
     _install_backend(monkeypatch, backend)
     oversized_by_default = Problem(stocks=_stocks(201), demands=())
 
-    disabled = solve(
-        oversized_by_default, SolveOptions(problem_size_limit=None)
-    )
-    overridden = solve(
-        oversized_by_default, SolveOptions(problem_size_limit=300)
-    )
+    disabled = solve(oversized_by_default, SolveOptions(problem_size_limit=None))
+    overridden = solve(oversized_by_default, SolveOptions(problem_size_limit=300))
 
     assert disabled.solution_status is SolutionStatus.INFEASIBLE
     assert overridden.solution_status is SolutionStatus.INFEASIBLE
     assert backend.calls == [
-        "check_availability", "check_support", "solve",
-        "check_availability", "check_support", "solve",
+        "check_availability",
+        "check_support",
+        "solve",
+        "check_availability",
+        "check_support",
+        "solve",
     ]
 
 
@@ -459,9 +450,7 @@ def test_time_limit_seconds_exact_boundary_reaches_the_backend_with_full_time(
     assert backend.calls == ["check_availability", "check_support", "solve"]
     assert backend.received_options is not None
     assert backend.received_options.deadline is not None
-    assert backend.received_options.deadline.remaining_seconds() == pytest.approx(
-        30.0
-    )
+    assert backend.received_options.deadline.remaining_seconds() == pytest.approx(30.0)
 
 
 def _time_limit_seconds_exceeded_solution(
@@ -473,9 +462,7 @@ def _time_limit_seconds_exceeded_solution(
     clock = FakeClock(start=0.0, step=1_000.0)
     _patch_clock(monkeypatch, clock)
     backend = RecordingBackend(
-        availability=BackendAvailability(
-            available=False, reason="should never be consulted"
-        )
+        availability=BackendAvailability(available=False, reason="should never be consulted")
     )
     _install_backend(monkeypatch, backend)
     problem = Problem(
@@ -519,7 +506,7 @@ class _ExpireClockAfterFirstSolve:
     def check_availability(self) -> BackendAvailability:
         return self._adapter.check_availability()
 
-    def solve(self, model, options):  # noqa: ANN001 - matches PulpCbcAdapter.solve
+    def solve(self, model, options):
         status = self._adapter.solve(model, options)
         self._clock.expire()
         return status
@@ -549,9 +536,7 @@ def test_real_mid_solve_time_limit_returns_an_independently_verified_incumbent(
     wrapped_backend = ExactEnumeratedBackend(
         _ExpireClockAfterFirstSolve(real_adapter, clock)  # type: ignore[arg-type]
     )
-    monkeypatch.setattr(
-        solve_module, "_BACKENDS", {"exact_enumerated": wrapped_backend}
-    )
+    monkeypatch.setattr(solve_module, "_BACKENDS", {"exact_enumerated": wrapped_backend})
     problem = Problem(
         stocks=(Stock("stock-10", "steel", 10, 1),),
         demands=(Demand("piece-6", "steel", 6, 1),),
@@ -561,9 +546,7 @@ def test_real_mid_solve_time_limit_returns_an_independently_verified_incumbent(
 
     assert result.solution_status is SolutionStatus.FEASIBLE
     assert result.diagnostics.termination_reason is TerminationReason.TIME_LIMIT
-    assert result.diagnostics.completed_objective_stages == (
-        ObjectiveStage.STOCK_PIECE_COUNT,
-    )
+    assert result.diagnostics.completed_objective_stages == (ObjectiveStage.STOCK_PIECE_COUNT,)
     assert result.diagnostics.backend_id == "exact_enumerated"
     assert result.diagnostics.backend_version is not None
     assert result.objective_value is not None

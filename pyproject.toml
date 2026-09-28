@@ -66,6 +66,12 @@ dev = [
     "pytest>=9,<10",
     # builds the sdist and wheel for scripts/build_distributions.py
     "build>=1.2.1,<2",
+    # formats and lints, see scripts/run_static_checks.py. ruff changes its
+    # formatter style and rule set between 0.x minors, so the bound stops at
+    # the next one
+    "ruff>=0.16.9,<0.17",
+    # checks the types of src/saw and scripts/
+    "mypy>=2.3.1,<3",
 ]
 
 [tool.setuptools.packages.find]
@@ -76,6 +82,46 @@ include = ["saw*"]
 # and the release suite ship in the sdist only (see MANIFEST.in)
 [tool.setuptools.package-data]
 saw = ["py.typed", "schemas/*.schema.json"]
+
+# scripts/run_static_checks.py runs ruff format, ruff check and mypy with
+# exactly this configuration, locally and in ci
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # import order
+    "B",    # bugbear
+    "BLE",  # blind except, the intended ones say why with a noqa
+    "UP",   # pyupgrade to the oldest supported python
+    "SIM",  # simplifications
+    "RUF",  # ruff's own checks
+]
+ignore = [
+    # the formatter owns line length, it leaves long strings and urls alone
+    "E501",
+]
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
+known-first-party = ["saw", "scripts", "tests"]
+
+[tool.mypy]
+python_version = "3.10"
+# tests are left out on purpose: they pass ill-typed values to exercise
+# validation, and ruff still lints them
+files = ["src", "scripts", "examples"]
+strict = true
+
+# ship no type information; saw only touches them in the backends and
+# the smoke test, tomli is only installed on python 3.10
+[[tool.mypy.overrides]]
+module = ["pulp", "pulp.*", "cbcbox", "jsonschema", "jsonschema.*", "tomli"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

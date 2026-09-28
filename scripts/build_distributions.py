@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from typing import Any
 import zipfile
 
 from packaging.metadata import Metadata
@@ -41,11 +42,15 @@ REPOSITORY_ONLY_PREFIXES = (".github/",)
 GENERATED_SDIST_FILES = {"PKG-INFO", "setup.cfg"}
 GENERATED_SDIST_PREFIXES = ("src/saw.egg-info/",)
 
+# the [project] table of pyproject.toml
+Project = dict[str, Any]
 
-def load_project(root: Path = REPOSITORY_ROOT) -> dict:
+
+def load_project(root: Path = REPOSITORY_ROOT) -> Project:
     """Return the [project] table of pyproject.toml."""
     with (root / "pyproject.toml").open("rb") as file:
-        return tomllib.load(file)["project"]
+        project: Project = tomllib.load(file)["project"]
+    return project
 
 
 def expected_schemas(directory: Path = SCHEMA_DIRECTORY) -> dict[str, bytes]:
@@ -53,23 +58,31 @@ def expected_schemas(directory: Path = SCHEMA_DIRECTORY) -> dict[str, bytes]:
     return {path.name: path.read_bytes() for path in sorted(directory.glob("*.schema.json"))}
 
 
-def find_artifacts(directory: Path, project: dict) -> tuple[list[str], Path | None, Path | None]:
+def find_artifacts(directory: Path, project: Project) -> tuple[list[str], Path | None, Path | None]:
     """Return problems plus the one sdist and the one wheel in *directory*."""
     name = canonicalize_name(project["name"]).replace("-", "_")
     version = str(Version(project["version"]))
     sdist = directory / f"{name}-{version}.tar.gz"
     wheel = directory / f"{name}-{version}-py3-none-any.whl"
     found = {path.name for path in directory.iterdir()} if directory.is_dir() else set()
-    problems = [f"missing artifact {path.name}" for path in (sdist, wheel) if path.name not in found]
-    problems += [f"unexpected artifact {extra}" for extra in sorted(found - {sdist.name, wheel.name})]
-    return problems, (sdist if sdist.name in found else None), (wheel if wheel.name in found else None)
+    problems = [
+        f"missing artifact {path.name}" for path in (sdist, wheel) if path.name not in found
+    ]
+    problems += [
+        f"unexpected artifact {extra}" for extra in sorted(found - {sdist.name, wheel.name})
+    ]
+    return (
+        problems,
+        (sdist if sdist.name in found else None),
+        (wheel if wheel.name in found else None),
+    )
 
 
-def check_metadata(raw: bytes, project: dict, source: str) -> list[str]:
+def check_metadata(raw: bytes, project: Project, source: str) -> list[str]:
     """Validate core metadata and compare it with pyproject.toml."""
     try:
         metadata = Metadata.from_email(raw, validate=True)
-    except Exception as error:  # an ExceptionGroup of every invalid field
+    except Exception as error:  # noqa: BLE001 - an ExceptionGroup of every invalid field
         details = getattr(error, "exceptions", [error])
         return [f"{source}: invalid metadata: {detail}" for detail in details]
 
@@ -107,7 +120,9 @@ def check_metadata(raw: bytes, project: dict, source: str) -> list[str]:
 def _record_problems(archive: zipfile.ZipFile, record_name: str) -> list[str]:
     rows = list(csv.reader(io.StringIO(archive.read(record_name).decode("utf-8"))))
     listed = {row[0] for row in rows}
-    problems = [f"wheel: {name} is missing from RECORD" for name in archive.namelist() if name not in listed]
+    problems = [
+        f"wheel: {name} is missing from RECORD" for name in archive.namelist() if name not in listed
+    ]
     for path, digest, size in rows:
         if path == record_name:
             continue
@@ -115,13 +130,16 @@ def _record_problems(archive: zipfile.ZipFile, record_name: str) -> list[str]:
             problems.append(f"wheel: RECORD lists missing file {path}")
             continue
         data = archive.read(path)
-        actual = "sha256=" + base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+        actual = (
+            "sha256="
+            + base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+        )
         if digest != actual or size != str(len(data)):
             problems.append(f"wheel: RECORD hash or size of {path} does not match")
     return problems
 
 
-def check_wheel(path: Path, project: dict, schemas: dict[str, bytes]) -> list[str]:
+def check_wheel(path: Path, project: Project, schemas: dict[str, bytes]) -> list[str]:
     """Check the wheel's metadata, entry point, schemas and file list."""
     name = canonicalize_name(project["name"]).replace("-", "_")
     dist_info = f"{name}-{Version(project['version'])}.dist-info"
@@ -129,7 +147,11 @@ def check_wheel(path: Path, project: dict, schemas: dict[str, bytes]) -> list[st
         names = set(archive.namelist())
         problems = []
 
-        for required in (f"{dist_info}/METADATA", f"{dist_info}/RECORD", f"{dist_info}/entry_points.txt"):
+        for required in (
+            f"{dist_info}/METADATA",
+            f"{dist_info}/RECORD",
+            f"{dist_info}/entry_points.txt",
+        ):
             if required not in names:
                 problems.append(f"wheel: missing {required}")
         if problems:
@@ -139,13 +161,20 @@ def check_wheel(path: Path, project: dict, schemas: dict[str, bytes]) -> list[st
         problems += _record_problems(archive, f"{dist_info}/RECORD")
 
         entry_points = configparser.ConfigParser(delimiters=("=",))
-        entry_points.optionxform = str
+        # keeps option names case-sensitive, the documented configparser idiom
+        # that typeshed types as a method
+        entry_points.optionxform = str  # type: ignore[assignment, method-assign]
         entry_points.read_string(archive.read(f"{dist_info}/entry_points.txt").decode("utf-8"))
         script, target = CONSOLE_SCRIPT
         if entry_points.get("console_scripts", script, fallback=None) != target:
             problems.append(f"wheel: console script {script} does not point to {target}")
 
-        for required in ("saw/__init__.py", "saw/cli.py", "saw/py.typed", f"{dist_info}/licenses/LICENSE"):
+        for required in (
+            "saw/__init__.py",
+            "saw/cli.py",
+            "saw/py.typed",
+            f"{dist_info}/licenses/LICENSE",
+        ):
             if required not in names:
                 problems.append(f"wheel: missing {required}")
 
@@ -180,7 +209,7 @@ def _is_generated(path: str) -> bool:
     return path in GENERATED_SDIST_FILES or path.startswith(GENERATED_SDIST_PREFIXES)
 
 
-def check_sdist(path: Path, project: dict, tracked_files: set[str]) -> list[str]:
+def check_sdist(path: Path, project: Project, tracked_files: set[str]) -> list[str]:
     """Check the sdist's metadata and that it holds exactly the release files."""
     name = canonicalize_name(project["name"]).replace("-", "_")
     top = f"{name}-{Version(project['version'])}"
@@ -192,10 +221,13 @@ def check_sdist(path: Path, project: dict, tracked_files: set[str]) -> list[str]
             if not member.name.startswith(f"{top}/"):
                 problems.append(f"sdist: {member.name} is outside {top}/")
                 continue
-            files[member.name[len(top) + 1:]] = member
+            files[member.name[len(top) + 1 :]] = member
         if "PKG-INFO" not in files:
-            return problems + ["sdist: missing PKG-INFO"]
-        problems += check_metadata(archive.extractfile(files["PKG-INFO"]).read(), project, "sdist")
+            return [*problems, "sdist: missing PKG-INFO"]
+        # members holds regular files only, which always extract
+        pkg_info = archive.extractfile(files["PKG-INFO"])
+        assert pkg_info is not None
+        problems += check_metadata(pkg_info.read(), project, "sdist")
 
     # the sdist must rebuild the wheel and run the release suite, so every
     # tracked release file belongs in it and nothing untracked may leak in
@@ -264,7 +296,8 @@ def main(argv: list[str] | None = None) -> int:
 
     for problem in problems:
         print(f"error: {problem}", file=sys.stderr)
-    if problems:
+    # find_artifacts reports a missing artifact as a problem
+    if problems or sdist is None or wheel is None:
         return 1
     for artifact in (sdist, wheel):
         print(f"ok: {artifact.relative_to(REPOSITORY_ROOT).as_posix()}")

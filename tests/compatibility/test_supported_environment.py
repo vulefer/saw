@@ -6,7 +6,6 @@ import sysconfig
 
 from saw.backends.pulp_backend import PulpCbcAdapter
 
-
 SUPPORTED_CPYTHON_MIN = (3, 10)
 SUPPORTED_CPYTHON_MAX_EXCLUSIVE = (3, 15)
 SUPPORTED_PLATFORMS = {

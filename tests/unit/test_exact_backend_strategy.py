@@ -3,8 +3,6 @@ from __future__ import annotations
 import pulp
 import pytest
 
-import saw.backends.exact_enumerated.backend as backend_module
-import saw.timing as timing_module
 from saw import Demand, Problem, Stock
 from saw.backends.base import (
     BackendAvailability,
@@ -15,6 +13,7 @@ from saw.backends.exact_enumerated import (
     ExactEnumeratedBackend,
     solve_exact_enumerated_pipeline,
 )
+import saw.backends.exact_enumerated.backend as backend_module
 from saw.backends.pulp_backend import PulpAdapterError
 from saw.models import (
     BackendStatus,
@@ -23,6 +22,7 @@ from saw.models import (
     TerminationReason,
 )
 from saw.patterns import enumerate_patterns_for_problem
+import saw.timing as timing_module
 from saw.timing import Deadline
 
 
@@ -188,9 +188,7 @@ def test_empty_demand_has_a_proven_zero_optimum_without_calling_solver() -> None
     assert result.diagnostics.termination_reason is TerminationReason.COMPLETED
     assert result.diagnostics.patterns_generated == 0
     assert result.diagnostics.iterations == 0
-    assert result.diagnostics.completed_objective_stages == tuple(
-        ObjectiveStage
-    )
+    assert result.diagnostics.completed_objective_stages == tuple(ObjectiveStage)
     assert result.diagnostics.lower_bound == 0
     assert result.diagnostics.upper_bound == 0
     assert adapter.solve_calls == 0
@@ -246,9 +244,7 @@ def test_adapter_failure_becomes_a_structured_backend_error() -> None:
 
     assert result.candidate is None
     assert result.diagnostics.backend_status is BackendStatus.FAILED
-    assert result.diagnostics.termination_reason is (
-        TerminationReason.BACKEND_FAILURE
-    )
+    assert result.diagnostics.termination_reason is (TerminationReason.BACKEND_FAILURE)
     # A primary-stage failure means exactly one solver call was attempted;
     # see docs/formats.md, "Diagnostics", for what `iterations` counts.
     assert result.diagnostics.iterations == 1
@@ -301,9 +297,7 @@ def test_secondary_stage_adapter_failure_reports_two_attempted_iterations() -> N
 
     assert result.candidate is None
     assert result.diagnostics.backend_status is BackendStatus.FAILED
-    assert result.diagnostics.termination_reason is (
-        TerminationReason.BACKEND_FAILURE
-    )
+    assert result.diagnostics.termination_reason is (TerminationReason.BACKEND_FAILURE)
     assert result.diagnostics.iterations == 2
     # An unexpected backend failure makes no mathematical claim, so the
     # primary stage's already-proved optimum is not reported as completed
@@ -329,9 +323,7 @@ def test_tertiary_stage_adapter_failure_reports_three_attempted_iterations() -> 
 
     assert result.candidate is None
     assert result.diagnostics.backend_status is BackendStatus.FAILED
-    assert result.diagnostics.termination_reason is (
-        TerminationReason.BACKEND_FAILURE
-    )
+    assert result.diagnostics.termination_reason is (TerminationReason.BACKEND_FAILURE)
     assert result.diagnostics.iterations == 3
     assert result.diagnostics.completed_objective_stages == ()
     assert result.diagnostics.lower_bound is None
@@ -347,7 +339,8 @@ def test_pattern_limit_exactly_matching_total_reaches_the_solver() -> None:
     backend = ExactEnumeratedBackend(adapter)  # type: ignore[arg-type]
 
     result = backend.solve(
-        _multi_pattern_problem(), BackendOptions(pattern_limit=3),
+        _multi_pattern_problem(),
+        BackendOptions(pattern_limit=3),
     )
 
     assert adapter.solve_calls == 1
@@ -362,7 +355,8 @@ def test_pattern_limit_hit_returns_limit_with_accurate_count_and_skips_the_solve
 
     # The problem enumerates to 3 patterns; a limit of 2 is hit on the 3rd.
     result = backend.solve(
-        _multi_pattern_problem(), BackendOptions(pattern_limit=2),
+        _multi_pattern_problem(),
+        BackendOptions(pattern_limit=2),
     )
 
     assert result.candidate is None
@@ -380,21 +374,17 @@ def test_pattern_limit_hit_is_deterministic_across_repeated_backend_calls() -> N
     problem = _multi_pattern_problem()
 
     first = ExactEnumeratedBackend(FakeAdapter()).solve(  # type: ignore[arg-type]
-        problem, BackendOptions(pattern_limit=2),
+        problem,
+        BackendOptions(pattern_limit=2),
     )
     second = ExactEnumeratedBackend(FakeAdapter()).solve(  # type: ignore[arg-type]
-        problem, BackendOptions(pattern_limit=2),
+        problem,
+        BackendOptions(pattern_limit=2),
     )
 
     assert first.diagnostics.backend_status == second.diagnostics.backend_status
-    assert (
-        first.diagnostics.termination_reason
-        == second.diagnostics.termination_reason
-    )
-    assert (
-        first.diagnostics.patterns_generated
-        == second.diagnostics.patterns_generated
-    )
+    assert first.diagnostics.termination_reason == second.diagnostics.termination_reason
+    assert first.diagnostics.patterns_generated == second.diagnostics.patterns_generated
 
 
 # --- one shared end-to-end time budget -------------------------------------
@@ -425,9 +415,7 @@ def test_each_stage_receives_only_what_remains_of_the_shared_deadline(
     )
 
     assert len(adapter.received_options) == 3
-    stage_limits = [
-        options.time_limit_seconds for options in adapter.received_options
-    ]
+    stage_limits = [options.time_limit_seconds for options in adapter.received_options]
     # Each stage receives strictly less than the one before it -- proof the
     # 10-second budget is shared across the three solver calls rather than
     # being handed to each of them in full (which would let a
@@ -460,9 +448,7 @@ def test_pipeline_anchors_its_own_deadline_when_none_is_shared(
         BackendOptions(time_limit_seconds=10.0),
     )
 
-    stage_limits = [
-        options.time_limit_seconds for options in adapter.received_options
-    ]
+    stage_limits = [options.time_limit_seconds for options in adapter.received_options]
     assert stage_limits == pytest.approx([10.0, 9.0, 8.0])
     assert result.diagnostics.backend_status is BackendStatus.OPTIMAL
 
@@ -509,9 +495,7 @@ def test_deadline_exhausted_after_a_stage_returns_the_prior_stage_incumbent(
     # candidate.
     assert result.diagnostics.backend_status is BackendStatus.FEASIBLE
     assert result.diagnostics.termination_reason is TerminationReason.TIME_LIMIT
-    assert result.diagnostics.completed_objective_stages == (
-        ObjectiveStage.STOCK_PIECE_COUNT,
-    )
+    assert result.diagnostics.completed_objective_stages == (ObjectiveStage.STOCK_PIECE_COUNT,)
     # The primary stage's proof is not thrown away just because the
     # secondary stage never got to run -- but it also must not imply that
     # the unattempted secondary or tertiary stages were themselves proved.

@@ -21,43 +21,76 @@ def validate_problem_collections(problem: Problem) -> None:
     require_unique_ids(tuple(stock.stock_id for stock in problem.stocks), "stock")
     require_unique_ids(tuple(demand.demand_id for demand in problem.demands), "demand")
 
+
 def validate_stock(stock: Stock, index: int) -> None:
     record = f"stock[{index}] ({stock.stock_id!r})"
     require_non_empty_string(
-        stock.stock_id, record, "stock_id", ValidationErrorCode.INVALID_STOCK_ID,
-        "stock", index,
+        stock.stock_id,
+        record,
+        "stock_id",
+        ValidationErrorCode.INVALID_STOCK_ID,
+        "stock",
+        index,
     )
     require_non_empty_string(
-        stock.material_id, record, "material_id",
-        ValidationErrorCode.INVALID_STOCK_MATERIAL_ID, "stock", index,
+        stock.material_id,
+        record,
+        "material_id",
+        ValidationErrorCode.INVALID_STOCK_MATERIAL_ID,
+        "stock",
+        index,
     )
     require_positive_integer(
-        stock.length, record, "length", ValidationErrorCode.INVALID_STOCK_LENGTH,
-        "stock", index,
+        stock.length,
+        record,
+        "length",
+        ValidationErrorCode.INVALID_STOCK_LENGTH,
+        "stock",
+        index,
     )
     require_positive_integer(
-        stock.quantity, record, "quantity",
-        ValidationErrorCode.INVALID_STOCK_QUANTITY, "stock", index,
+        stock.quantity,
+        record,
+        "quantity",
+        ValidationErrorCode.INVALID_STOCK_QUANTITY,
+        "stock",
+        index,
     )
 
 
 def validate_demand(demand: Demand, index: int) -> None:
     record = f"demand[{index}] ({demand.demand_id!r})"
     require_non_empty_string(
-        demand.demand_id, record, "demand_id",
-        ValidationErrorCode.INVALID_DEMAND_ID, "demand", index,
+        demand.demand_id,
+        record,
+        "demand_id",
+        ValidationErrorCode.INVALID_DEMAND_ID,
+        "demand",
+        index,
     )
     require_non_empty_string(
-        demand.material_id, record, "material_id",
-        ValidationErrorCode.INVALID_DEMAND_MATERIAL_ID, "demand", index,
+        demand.material_id,
+        record,
+        "material_id",
+        ValidationErrorCode.INVALID_DEMAND_MATERIAL_ID,
+        "demand",
+        index,
     )
     require_positive_integer(
-        demand.length, record, "length",
-        ValidationErrorCode.INVALID_DEMAND_LENGTH, "demand", index,
+        demand.length,
+        record,
+        "length",
+        ValidationErrorCode.INVALID_DEMAND_LENGTH,
+        "demand",
+        index,
     )
     require_positive_integer(
-        demand.quantity, record, "quantity",
-        ValidationErrorCode.INVALID_DEMAND_QUANTITY, "demand", index,
+        demand.quantity,
+        record,
+        "quantity",
+        ValidationErrorCode.INVALID_DEMAND_QUANTITY,
+        "demand",
+        index,
     )
 
 
@@ -97,6 +130,7 @@ def require_positive_integer(
             field=field,
         )
 
+
 # checks if all of the ids in the tuple are unique
 def require_unique_ids(identifiers: tuple[str, ...], field: str) -> None:
     duplicates = find_duplicates(identifiers)
@@ -116,6 +150,7 @@ def require_unique_ids(identifiers: tuple[str, ...], field: str) -> None:
             field=f"{field}_id",
             conflicting_ids=sorted_duplicates,
         )
+
 
 def find_duplicates(records: tuple[str, ...]) -> set[str]:
     seen = set()

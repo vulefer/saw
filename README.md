@@ -41,14 +41,11 @@ problem = Problem(
 
 solution = solve(problem)
 if solution.solution_status is not SolutionStatus.OPTIMAL:
-    raise RuntimeError(
-        f"Expected an optimal solution, got {solution.solution_status.value}"
-    )
+    raise RuntimeError(f"Expected an optimal solution, got {solution.solution_status.value}")
 
 for cut_pattern in solution.cut_patterns:
     pieces = ", ".join(
-        f"{demand_id} x {count}"
-        for demand_id, count in cut_pattern.piece_counts.items()
+        f"{demand_id} x {count}" for demand_id, count in cut_pattern.piece_counts.items()
     )
     print(f"{cut_pattern.stock_id} x {cut_pattern.repetitions}: {pieces}")
 ```
@@ -112,6 +109,23 @@ python scripts/run_release_tests.py
 ```
 
 The command exits with a non-zero status if any required test fails.
+
+Run the formatter check, the linter, and the type checker, exactly as CI
+does, with:
+
+```shell
+python scripts/run_static_checks.py
+```
+
+It runs `ruff format --check`, `ruff check`, and `mypy`, reports every failed
+check by name, and exits non-zero if any failed. Pass `--fix` to reformat and
+apply the safe lint fixes instead. All three tools are configured in
+`pyproject.toml`: ruff covers the whole tree with a 100-character line, and
+mypy runs in strict mode on `src/saw`, `scripts/`, and `examples/`. The test
+tree is deliberately not type checked, because many tests pass ill-typed
+values on purpose to exercise validation; ruff still formats and lints it.
+PuLP, cbcbox, and jsonschema ship no type information and, with tomli (only
+installed on Python 3.10), are the only modules mypy is told to skip.
 
 ## Building release artifacts
 

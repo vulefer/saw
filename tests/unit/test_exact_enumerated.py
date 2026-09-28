@@ -7,8 +7,8 @@ from saw.backends.exact_enumerated import (
     PrimaryStockCountResult,
     SecondaryLeftoverResult,
     TertiaryDistinctPatternCountResult,
-    add_exact_demand_constraints,
     add_bounded_stock_constraints,
+    add_exact_demand_constraints,
     build_pattern_use_indicators,
     build_pattern_variables,
     build_primary_stock_count_model,
@@ -129,12 +129,8 @@ def test_variable_names_are_deterministic_for_reordered_patterns() -> None:
     original = build_pattern_variables(problem, patterns)
     reordered = build_pattern_variables(problem, tuple(reversed(patterns)))
 
-    assert {
-        pattern: variable.name
-        for pattern, variable in original.items()
-    } == {
-        pattern: variable.name
-        for pattern, variable in reordered.items()
+    assert {pattern: variable.name for pattern, variable in original.items()} == {
+        pattern: variable.name for pattern, variable in reordered.items()
     }
     assert {variable.name for variable in original.values()} == {
         "pattern_usage_000000",
@@ -209,10 +205,7 @@ def test_adds_one_equality_constraint_per_demand_id() -> None:
 
     add_exact_demand_constraints(model, problem, variables)
 
-    assert tuple(
-        constraint.name
-        for constraint in _model_constraints(model)
-    ) == (
+    assert tuple(constraint.name for constraint in _model_constraints(model)) == (
         "exact_demand_000000",
         "exact_demand_000001",
     )
@@ -286,10 +279,7 @@ def test_adds_one_inventory_constraint_per_stock_id() -> None:
 
     add_bounded_stock_constraints(model, problem, variables)
 
-    assert tuple(
-        constraint.name
-        for constraint in _model_constraints(model)
-    ) == (
+    assert tuple(constraint.name for constraint in _model_constraints(model)) == (
         "bounded_stock_000000",
         "bounded_stock_000001",
     )
@@ -369,10 +359,7 @@ def test_primary_model_is_a_minimization_problem_with_all_constraints() -> None:
     assert model.sense == pulp.LpMinimize
     assert model.objective is stock_count
     assert set(variables) == {pattern}
-    assert tuple(
-        constraint.name
-        for constraint in _model_constraints(model)
-    ) == (
+    assert tuple(constraint.name for constraint in _model_constraints(model)) == (
         "exact_demand_000000",
         "bounded_stock_000000",
     )
@@ -503,8 +490,7 @@ def test_primary_stage_records_no_optimum_without_an_optimality_proof(
     )
 
 
-def test_primary_stage_does_not_translate_backend_failure_to_infeasibility(
-) -> None:
+def test_primary_stage_does_not_translate_backend_failure_to_infeasibility() -> None:
     model = pulp.LpProblem("primary_stock_count", pulp.LpMinimize)
     stock_count = pulp.LpAffineExpression()
     solve_error = RuntimeError("backend failed")
@@ -822,10 +808,7 @@ def test_builds_one_binary_use_indicator_per_pattern() -> None:
 
     assert set(indicators) == set(pattern_variables)
     assert all(indicator.isBinary() for indicator in indicators.values())
-    assert {
-        indicator.name
-        for indicator in indicators.values()
-    } == {
+    assert {indicator.name for indicator in indicators.values()} == {
         "pattern_used_000000",
         "pattern_used_000001",
     }
@@ -850,10 +833,7 @@ def test_pattern_use_indicators_are_linked_by_stock_availability() -> None:
         problem,
         pattern_variables,
     )
-    stocks_by_id = {
-        stock.stock_id: stock
-        for stock in problem.stocks
-    }
+    stocks_by_id = {stock.stock_id: stock for stock in problem.stocks}
 
     for index, (pattern, indicator) in enumerate(indicators.items()):
         pattern_variable = pattern_variables[pattern]
@@ -932,10 +912,7 @@ def test_distinct_pattern_objective_counts_only_positive_use() -> None:
     indicators[unused_pattern].varValue = 0
 
     assert pulp.value(distinct_pattern_count) == 1
-    assert all(
-        constraint.valid(0)
-        for constraint in _model_constraints(model)
-    )
+    assert all(constraint.valid(0) for constraint in _model_constraints(model))
 
 
 def test_tertiary_stage_fixes_leftover_and_replaces_objective() -> None:
@@ -977,14 +954,8 @@ def test_tertiary_stage_fixes_leftover_and_replaces_objective() -> None:
     assert fixed_leftover.sense == pulp.LpConstraintEQ
     assert model.objective is distinct_pattern_count
     assert len(distinct_pattern_count) == 2
-    assert all(
-        variable.isBinary()
-        for variable in distinct_pattern_count.keys()
-    )
-    assert all(
-        coefficient == 1
-        for coefficient in distinct_pattern_count.values()
-    )
+    assert all(variable.isBinary() for variable in distinct_pattern_count)
+    assert all(coefficient == 1 for coefficient in distinct_pattern_count.values())
 
     pattern_variables[single_piece_pattern].varValue = 1
     pattern_variables[double_piece_pattern].varValue = 1
@@ -1001,9 +972,7 @@ def test_tertiary_stage_records_a_proven_optimal_pattern_count() -> None:
     model = pulp.LpProblem("tertiary_pattern_count", pulp.LpMinimize)
     first_indicator = pulp.LpVariable("first_used", cat=pulp.LpBinary)
     second_indicator = pulp.LpVariable("second_used", cat=pulp.LpBinary)
-    distinct_pattern_count = pulp.lpSum(
-        (first_indicator, second_indicator)
-    )
+    distinct_pattern_count = pulp.lpSum((first_indicator, second_indicator))
     first_indicator.varValue = 1
     second_indicator.varValue = 0
     adapter = FakeStageAdapter()

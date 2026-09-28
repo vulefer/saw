@@ -22,7 +22,10 @@ _NO_MAGNITUDE_LIMIT = SolveOptions(numeric_magnitude_limit=None)
 
 
 def _problem(
-    *, stock_length: int, stock_quantity: int = 1, demand_quantity: int = 1,
+    *,
+    stock_length: int,
+    stock_quantity: int = 1,
+    demand_quantity: int = 1,
 ) -> Problem:
     return Problem(
         stocks=(Stock("stock", "steel", stock_length, stock_quantity),),
