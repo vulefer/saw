@@ -11,7 +11,6 @@ from itertools import product
 
 from saw.models import Demand, Problem, Stock
 
-
 _MATERIAL_ID = "steel"
 _STOCK_LENGTHS = (3, 5)
 _DEMAND_LENGTHS = (2, 4)

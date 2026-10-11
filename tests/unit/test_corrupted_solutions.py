@@ -42,9 +42,7 @@ def _finding_codes(
     problem: Problem,
     solution: Solution,
 ) -> list[VerificationFindingCode]:
-    return [
-        finding.code for finding in verify_solution(problem, solution).findings
-    ]
+    return [finding.code for finding in verify_solution(problem, solution).findings]
 
 
 def test_deliberately_over_capacity_solution_is_rejected() -> None:
@@ -68,9 +66,7 @@ def test_deliberately_over_capacity_solution_is_rejected() -> None:
         objective=ObjectiveValue(2, 8, 2),
     )
 
-    assert _finding_codes(problem, solution) == [
-        VerificationFindingCode.PATTERN_CAPACITY_EXCEEDED
-    ]
+    assert _finding_codes(problem, solution) == [VerificationFindingCode.PATTERN_CAPACITY_EXCEEDED]
 
 
 def test_deliberately_wrong_material_solution_is_rejected() -> None:
@@ -86,9 +82,7 @@ def test_deliberately_wrong_material_solution_is_rejected() -> None:
         objective=ObjectiveValue(1, 6, 1),
     )
 
-    assert _finding_codes(problem, solution) == [
-        VerificationFindingCode.MATERIAL_MISMATCH
-    ]
+    assert _finding_codes(problem, solution) == [VerificationFindingCode.MATERIAL_MISMATCH]
 
 
 def test_deliberately_exceeded_stock_quantity_is_rejected() -> None:
@@ -104,9 +98,7 @@ def test_deliberately_exceeded_stock_quantity_is_rejected() -> None:
         objective=ObjectiveValue(2, 8, 1),
     )
 
-    assert _finding_codes(problem, solution) == [
-        VerificationFindingCode.STOCK_QUANTITY_EXCEEDED
-    ]
+    assert _finding_codes(problem, solution) == [VerificationFindingCode.STOCK_QUANTITY_EXCEEDED]
 
 
 @pytest.mark.parametrize(

@@ -30,10 +30,7 @@ def _produced_by_demand_id(solution: Solution) -> dict[str, int]:
 
 
 def _stock_used(solution: Solution) -> dict[str, int]:
-    return {
-        cut_pattern.stock_id: cut_pattern.repetitions
-        for cut_pattern in solution.cut_patterns
-    }
+    return {cut_pattern.stock_id: cut_pattern.repetitions for cut_pattern in solution.cut_patterns}
 
 
 def test_stock_10_uses_the_mixed_6_plus_4_pattern() -> None:

@@ -5,21 +5,20 @@ import pulp
 from saw.models import Problem
 from saw.patterns import Pattern
 
+
 #
 def pattern_sort_key(
     pattern: Pattern,
 ) -> tuple[str, tuple[tuple[str, int], ...]]:
     return pattern.stock_id, tuple(pattern.piece_counts.items())
 
+
 # builds a dictionary of type Pattern: LpVariable for later use when extracting results
 def build_pattern_variables(
     problem: Problem,
     patterns: tuple[Pattern, ...],
 ) -> dict[Pattern, pulp.LpVariable]:
-    stocks_by_id = {
-        stock.stock_id: stock
-        for stock in problem.stocks
-    }
+    stocks_by_id = {stock.stock_id: stock for stock in problem.stocks}
     canonical_patterns = sorted(set(patterns), key=pattern_sort_key)
 
     return {
@@ -31,6 +30,7 @@ def build_pattern_variables(
         )
         for index, pattern in enumerate(canonical_patterns)
     }
+
 
 # configures the exact demand constraints in the problem
 def add_exact_demand_constraints(
@@ -48,6 +48,7 @@ def add_exact_demand_constraints(
             total_produced == demand.quantity,
             name=f"exact_demand_{index:06d}",
         )
+
 
 # configures the bounded stock constraints in the problem
 def add_bounded_stock_constraints(
@@ -67,19 +68,14 @@ def add_bounded_stock_constraints(
             name=f"bounded_stock_{index:06d}",
         )
 
+
 # helper function that constructs the secondary (total leftover) expression
 def build_total_leftover_expression(
     problem: Problem,
     pattern_variables: dict[Pattern, pulp.LpVariable],
 ) -> pulp.LpAffineExpression:
-    stocks_by_id = {
-        stock.stock_id: stock
-        for stock in problem.stocks
-    }
-    demands_by_id = {
-        demand.demand_id: demand
-        for demand in problem.demands
-    }
+    stocks_by_id = {stock.stock_id: stock for stock in problem.stocks}
+    demands_by_id = {demand.demand_id: demand for demand in problem.demands}
 
     return pulp.lpSum(
         (
@@ -88,9 +84,11 @@ def build_total_leftover_expression(
                 demands_by_id[demand_id].length * piece_count
                 for demand_id, piece_count in pattern.piece_counts.items()
             )
-        ) * variable
+        )
+        * variable
         for pattern, variable in pattern_variables.items()
     )
+
 
 # helper function that constructs the dictionary used for constructing the ternary optimization objective
 def build_pattern_use_indicators(
@@ -98,15 +96,10 @@ def build_pattern_use_indicators(
     problem: Problem,
     pattern_variables: dict[Pattern, pulp.LpVariable],
 ) -> dict[Pattern, pulp.LpVariable]:
-    stocks_by_id = {
-        stock.stock_id: stock
-        for stock in problem.stocks
-    }
+    stocks_by_id = {stock.stock_id: stock for stock in problem.stocks}
     pattern_use_indicators: dict[Pattern, pulp.LpVariable] = {}
 
-    for index, (pattern, pattern_variable) in enumerate(
-        pattern_variables.items()
-    ):
+    for index, (pattern, pattern_variable) in enumerate(pattern_variables.items()):
         indicator = pulp.LpVariable(
             name=f"pattern_used_{index:06d}",
             cat=pulp.LpBinary,

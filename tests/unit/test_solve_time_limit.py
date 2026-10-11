@@ -65,9 +65,7 @@ class RecordingBackend:
     availability: BackendAvailability = field(
         default_factory=lambda: BackendAvailability(available=True)
     )
-    support: BackendSupport = field(
-        default_factory=lambda: BackendSupport(supported=True)
-    )
+    support: BackendSupport = field(default_factory=lambda: BackendSupport(supported=True))
     calls: list[str] = field(default_factory=list)
     received_options: BackendOptions | None = None
 
@@ -126,9 +124,7 @@ def _install_backend(
     backend: RecordingBackend,
 ) -> None:
     solve_module = import_module("saw.solve")
-    monkeypatch.setattr(
-        solve_module, "_BACKENDS", {"exact_enumerated": backend}
-    )
+    monkeypatch.setattr(solve_module, "_BACKENDS", {"exact_enumerated": backend})
 
 
 def _patch_clock(monkeypatch: pytest.MonkeyPatch, clock: FakeClock) -> None:
@@ -152,7 +148,7 @@ def _assert_time_limit_result(result) -> None:
     # backend_status is LIMIT_REACHED -- not NOT_RUN -- even for this
     # preflight-only outcome: the version 1 JSON schema's limitDiagnostics
     # requires backend_status: "limit_reached" for every `limit`
-    # solution_status (see schemas/solution-v1.schema.json and
+    # solution_status (see src/saw/schemas/solution-v1.schema.json and
     # docs/formats.md, "Diagnostics"). NOT_RUN is reserved for
     # `unsupported`.
     assert result.diagnostics.backend_status is BackendStatus.LIMIT_REACHED
@@ -182,9 +178,7 @@ def test_expired_deadline_short_circuits_before_backend_availability_is_checked(
     clock = FakeClock(start=0.0, step=1_000.0)
     _patch_clock(monkeypatch, clock)
     backend = RecordingBackend(
-        availability=BackendAvailability(
-            available=False, reason="should never be consulted"
-        )
+        availability=BackendAvailability(available=False, reason="should never be consulted")
     )
     _install_backend(monkeypatch, backend)
     problem = Problem(stocks=(_stock(),), demands=(_demand(),))
@@ -211,9 +205,7 @@ def test_healthy_deadline_reaches_the_backend_with_a_live_deadline_attached(
     assert backend.received_options is not None
     assert backend.received_options.time_limit_seconds == 30.0
     assert backend.received_options.deadline is not None
-    assert backend.received_options.deadline.remaining_seconds() == pytest.approx(
-        30.0
-    )
+    assert backend.received_options.deadline.remaining_seconds() == pytest.approx(30.0)
 
 
 def test_unlimited_time_never_produces_a_preflight_time_limit_result(
@@ -257,9 +249,7 @@ def test_size_limit_is_checked_before_the_time_limit(
     backend = RecordingBackend()
     _install_backend(monkeypatch, backend)
     problem = Problem(
-        stocks=tuple(
-            Stock(f"stock-{i}", "steel", 10, 1) for i in range(201)
-        ),
+        stocks=tuple(Stock(f"stock-{i}", "steel", 10, 1) for i in range(201)),
         demands=(),
     )
 

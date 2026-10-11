@@ -6,10 +6,10 @@ from saw import (
     SawError,
     SerializationError,
     SerializationErrorCode,
+    SolutionStatus,
     ValidationError,
     ValidationErrorCode,
 )
-from saw import SolutionStatus
 
 
 @pytest.mark.parametrize(
@@ -108,10 +108,7 @@ def test_serialization_error_requires_an_explicit_category() -> None:
 
 
 def test_serialization_error_categories_have_stable_values() -> None:
-    assert {
-        code.name: code.value
-        for code in SerializationErrorCode
-    } == {
+    assert {code.name: code.value for code in SerializationErrorCode} == {
         "INVALID_JSON": "invalid_json",
         "UNSUPPORTED_FORMAT_VERSION": "unsupported_format_version",
         "SCHEMA_VIOLATION": "schema_violation",
@@ -126,9 +123,7 @@ def test_backend_error_preserves_chained_internal_cause() -> None:
         try:
             raise backend_error
         except RuntimeError as exc:
-            raise BackendUnavailableError(
-                "The requested backend is unavailable."
-            ) from exc
+            raise BackendUnavailableError("The requested backend is unavailable.") from exc
 
     assert captured.value.__cause__ is backend_error
     assert str(captured.value) == "The requested backend is unavailable."

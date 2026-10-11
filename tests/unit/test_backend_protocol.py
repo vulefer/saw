@@ -89,9 +89,7 @@ def test_capabilities_take_an_immutable_snapshot_of_objective_stages() -> None:
     )
     stages.add(ObjectiveStage.TOTAL_LEFTOVER)
 
-    assert capabilities.objective_stages == frozenset(
-        {ObjectiveStage.STOCK_PIECE_COUNT}
-    )
+    assert capabilities.objective_stages == frozenset({ObjectiveStage.STOCK_PIECE_COUNT})
 
 
 def test_availability_can_explain_why_a_backend_cannot_run() -> None:

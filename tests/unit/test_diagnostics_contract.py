@@ -3,7 +3,7 @@
 These tests verify, for every public ``SolutionStatus``, that
 ``Solution.diagnostics`` matches the rules documented in
 ``docs/formats.md`` ("Diagnostics" and "Diagnostics by solution_status")
-and enforced structurally by ``schemas/solution-v1.schema.json``. They also
+and enforced structurally by ``src/saw/schemas/solution-v1.schema.json``. They also
 cover the two Python-only fields, ``backend_id`` and ``backend_version``
 (see ``docs/formats.md``, "Python-only diagnostics fields"): populated as
 soon as ``solve()`` reaches a backend's ``check_availability()``, and
@@ -21,13 +21,13 @@ are not currently reachable through the bundled backend at all.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from importlib import import_module
+import math
 
 import pytest
 
-from saw import Demand, Problem, SolveOptions, Stock, solve
+from saw import Demand, Problem, Stock, solve
 from saw.backends.base import (
     BackendAvailability,
     BackendCapabilities,
@@ -47,7 +47,6 @@ from saw.models import (
     TerminationReason,
 )
 from saw.patterns import Pattern
-
 
 # --- shared assertion helpers -----------------------------------------------
 
@@ -124,9 +123,7 @@ def _assert_diagnostics_contract(solution: Solution) -> None:
         else:
             assert solution.verification_report.is_valid
     elif status is SolutionStatus.UNSUPPORTED:
-        assert diagnostics.termination_reason is (
-            TerminationReason.UNSUPPORTED_PROBLEM
-        )
+        assert diagnostics.termination_reason is (TerminationReason.UNSUPPORTED_PROBLEM)
         assert diagnostics.backend_status is BackendStatus.NOT_RUN
         assert diagnostics.completed_objective_stages == ()
         assert diagnostics.lower_bound is None
@@ -155,13 +152,9 @@ class RecordingBackend:
     result: UnverifiedBackendResult
     selected_id: str = "recording"
     availability: BackendAvailability = field(
-        default_factory=lambda: BackendAvailability(
-            available=True, backend_version="recording-1.0"
-        )
+        default_factory=lambda: BackendAvailability(available=True, backend_version="recording-1.0")
     )
-    support: BackendSupport = field(
-        default_factory=lambda: BackendSupport(supported=True)
-    )
+    support: BackendSupport = field(default_factory=lambda: BackendSupport(supported=True))
 
     @property
     def backend_id(self) -> str:
@@ -202,9 +195,7 @@ def _install_backend(
     monkeypatch.setattr(solve_module, "_BACKENDS", {"exact_enumerated": backend})
 
 
-def _verifiable_problem_and_candidate() -> tuple[
-    Problem, tuple[CutPattern, ...], ObjectiveValue
-]:
+def _verifiable_problem_and_candidate() -> tuple[Problem, tuple[CutPattern, ...], ObjectiveValue]:
     """A problem with exactly one feasible non-empty pattern that consumes a
     stock record completely -- so the corresponding candidate is trivially,
     deterministically verifiable regardless of which backend_status it is
@@ -215,9 +206,7 @@ def _verifiable_problem_and_candidate() -> tuple[
         stocks=(Stock("s", "steel", 10, 1),),
         demands=(Demand("d", "steel", 10, 1),),
     )
-    cut_patterns = (
-        CutPattern(pattern=Pattern("s", {"d": 1}), repetitions=1),
-    )
+    cut_patterns = (CutPattern(pattern=Pattern("s", {"d": 1}), repetitions=1),)
     objective_value = ObjectiveValue(
         stock_piece_count=1, total_leftover=0, distinct_pattern_count=1
     )
@@ -270,9 +259,7 @@ def test_infeasible_diagnostics_contract() -> None:
 
 def test_limit_without_incumbent_diagnostics_contract() -> None:
     problem = Problem(
-        stocks=tuple(
-            Stock(f"stock-{index}", "steel", 10, 1) for index in range(201)
-        ),
+        stocks=tuple(Stock(f"stock-{index}", "steel", 10, 1) for index in range(201)),
         demands=(),
     )
 

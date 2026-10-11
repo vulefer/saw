@@ -2,9 +2,9 @@ from copy import deepcopy
 import json
 from pathlib import Path
 
-import pytest
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
+import pytest
 
 from saw import (
     BackendStatus,
@@ -25,12 +25,9 @@ from saw import (
 )
 from saw.patterns import Pattern
 
-
 REPOSITORY_ROOT = Path(__file__).parents[2]
-SCHEMA_PATH = REPOSITORY_ROOT / "schemas" / "solution-v1.schema.json"
-OPTIMAL_EXAMPLE_PATH = (
-    REPOSITORY_ROOT / "examples" / "json" / "solution-v1-optimal.json"
-)
+SCHEMA_PATH = REPOSITORY_ROOT / "src" / "saw" / "schemas" / "solution-v1.schema.json"
+OPTIMAL_EXAMPLE_PATH = REPOSITORY_ROOT / "examples" / "json" / "solution-v1-optimal.json"
 
 
 @pytest.fixture(scope="module")
@@ -388,9 +385,7 @@ def test_cut_pattern_counts_and_repetitions_are_distinct_positive_values(
 _CUT_PATTERN = CutPattern(
     pattern=Pattern("stock-10", {"demand-4": 1, "demand-6": 1}), repetitions=2
 )
-_OBJECTIVE_VALUE = ObjectiveValue(
-    stock_piece_count=2, total_leftover=0, distinct_pattern_count=1
-)
+_OBJECTIVE_VALUE = ObjectiveValue(stock_piece_count=2, total_leftover=0, distinct_pattern_count=1)
 _VALID_REPORT = VerificationReport(findings=())
 
 
@@ -641,14 +636,12 @@ def test_real_preflight_size_limit_solve_output_validates(
     validator: Draft202012Validator,
 ) -> None:
     # Regression test: solve()'s preflight size_limit outcome once reported
-    # backend_status "not_run", which schemas/solution-v1.schema.json's
+    # backend_status "not_run", which src/saw/schemas/solution-v1.schema.json's
     # limitDiagnostics rejects for solution_status "limit" (it requires
     # "limit_reached"). See docs/formats.md, "Diagnostics", for the fixed
     # rule.
     problem = Problem(
-        stocks=tuple(
-            Stock(f"stock-{index}", "steel", 10, 1) for index in range(201)
-        ),
+        stocks=tuple(Stock(f"stock-{index}", "steel", 10, 1) for index in range(201)),
         demands=(),
     )
 
@@ -667,9 +660,7 @@ def test_real_preflight_time_limit_solve_output_validates(
         demands=(Demand("piece-6", "steel", 6, 1),),
     )
 
-    payload = _validate_solve_output(
-        validator, problem, SolveOptions(time_limit_seconds=1e-12)
-    )
+    payload = _validate_solve_output(validator, problem, SolveOptions(time_limit_seconds=1e-12))
 
     assert payload["solution_status"] == "limit"
     assert payload["diagnostics"]["backend_status"] == "limit_reached"
@@ -687,9 +678,7 @@ def test_real_pattern_limit_solve_output_validates(
         ),
     )
 
-    payload = _validate_solve_output(
-        validator, problem, SolveOptions(pattern_limit=2)
-    )
+    payload = _validate_solve_output(validator, problem, SolveOptions(pattern_limit=2))
 
     assert payload["solution_status"] == "limit"
     assert payload["diagnostics"]["backend_status"] == "limit_reached"

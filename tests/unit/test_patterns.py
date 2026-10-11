@@ -1,13 +1,13 @@
 from itertools import product
 
-import saw.patterns as patterns_module
-import saw.timing as timing_module
 from saw import Demand, Problem, Stock
+import saw.patterns as patterns_module
 from saw.patterns import (
     Pattern,
     enumerate_patterns_for_problem,
     enumerate_patterns_for_single_stock,
 )
+import saw.timing as timing_module
 from saw.timing import Deadline
 
 
@@ -35,8 +35,7 @@ CanonicalPattern = tuple[str, tuple[tuple[str, int], ...]]
 
 def _canonical_pattern_set(patterns: tuple[Pattern, ...]) -> frozenset[CanonicalPattern]:
     return frozenset(
-        (pattern.stock_id, tuple(sorted(pattern.piece_counts.items())))
-        for pattern in patterns
+        (pattern.stock_id, tuple(sorted(pattern.piece_counts.items()))) for pattern in patterns
     )
 
 
@@ -50,27 +49,32 @@ def _independently_generate_pattern_set(
         compatible_demands = tuple(
             demand for demand in demands if demand.material_id == stock.material_id
         )
-        count_ranges = tuple(
-            range(demand.quantity + 1) for demand in compatible_demands
-        )
+        count_ranges = tuple(range(demand.quantity + 1) for demand in compatible_demands)
 
         for counts in product(*count_ranges):
             if not any(counts):
                 continue
-            if sum(
-                demand.length * count
-                for demand, count in zip(compatible_demands, counts)
-            ) > stock.length:
+            if (
+                sum(
+                    demand.length * count
+                    for demand, count in zip(compatible_demands, counts, strict=True)
+                )
+                > stock.length
+            ):
                 continue
 
-            patterns.add((
-                stock.stock_id,
-                tuple(sorted(
-                    (demand.demand_id, count)
-                    for demand, count in zip(compatible_demands, counts)
-                    if count > 0
-                )),
-            ))
+            patterns.add(
+                (
+                    stock.stock_id,
+                    tuple(
+                        sorted(
+                            (demand.demand_id, count)
+                            for demand, count in zip(compatible_demands, counts, strict=True)
+                            if count > 0
+                        )
+                    ),
+                )
+            )
 
     return frozenset(patterns)
 
@@ -108,10 +112,7 @@ def test_enumerated_patterns_never_exceed_stock_capacity() -> None:
         <= stock.length
         for pattern in patterns
     )
-    assert any(
-        dict(pattern.piece_counts) == {"demand-4": 1, "demand-6": 1}
-        for pattern in patterns
-    )
+    assert any(dict(pattern.piece_counts) == {"demand-4": 1, "demand-6": 1} for pattern in patterns)
 
 
 def test_enumerated_counts_never_exceed_demand_quantity() -> None:
@@ -160,9 +161,7 @@ def test_enumeration_matches_an_independently_generated_pattern_set() -> None:
 
     actual = enumerate_patterns_for_single_stock(stock, demands)
 
-    assert _canonical_pattern_set(actual) == _independently_generate_pattern_set(
-        (stock,), demands
-    )
+    assert _canonical_pattern_set(actual) == _independently_generate_pattern_set((stock,), demands)
 
 
 def test_stock_ten_includes_the_mixed_six_plus_four_pattern() -> None:
@@ -223,12 +222,8 @@ def test_multiple_materials_never_produce_mixed_patterns() -> None:
             Demand("wood-3", "wood", 3, 1),
         ),
     )
-    stock_materials = {
-        stock.stock_id: stock.material_id for stock in problem.stocks
-    }
-    demand_materials = {
-        demand.demand_id: demand.material_id for demand in problem.demands
-    }
+    stock_materials = {stock.stock_id: stock.material_id for stock in problem.stocks}
+    demand_materials = {demand.demand_id: demand.material_id for demand in problem.demands}
 
     result = enumerate_patterns_for_problem(problem)
 
@@ -335,7 +330,8 @@ def test_pattern_limit_is_shared_across_stocks_and_stops_mid_second_stock() -> N
     )
 
     unbounded_a = enumerate_patterns_for_single_stock(
-        stock_a, (demand_a, *demands_b),
+        stock_a,
+        (demand_a, *demands_b),
     )
     assert len(unbounded_a) == 3
 
@@ -375,7 +371,9 @@ def test_pattern_limit_checks_the_budget_while_generating_not_only_after_complet
             yield pattern
 
     monkeypatch.setattr(
-        patterns_module, "_iter_patterns_for_single_stock", counting_iter,
+        patterns_module,
+        "_iter_patterns_for_single_stock",
+        counting_iter,
     )
 
     result = enumerate_patterns_for_problem(problem, pattern_limit=5)
@@ -449,7 +447,9 @@ def test_deadline_expiring_mid_enumeration_stops_generation_and_discards_pattern
             yield pattern
 
     monkeypatch.setattr(
-        patterns_module, "_iter_patterns_for_single_stock", counting_iter,
+        patterns_module,
+        "_iter_patterns_for_single_stock",
+        counting_iter,
     )
     deadline = Deadline.from_start(started_at=0.0, time_limit_seconds=1.0)
 
@@ -477,7 +477,9 @@ def test_deadline_is_checked_before_pattern_limit_when_both_would_trigger(
     # pattern_limit=0 would also trip on the very first pattern; the
     # deadline check must win per docs/resource-limits.md.
     result = enumerate_patterns_for_problem(
-        problem, pattern_limit=0, deadline=deadline,
+        problem,
+        pattern_limit=0,
+        deadline=deadline,
     )
 
     assert result.deadline_expired is True

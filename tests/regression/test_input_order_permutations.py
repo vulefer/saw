@@ -7,7 +7,6 @@ import pytest
 
 from saw import Demand, Problem, Solution, Stock, solve
 
-
 _ORDERINGS = (
     (0, 1, 2),
     (1, 2, 0),
@@ -27,14 +26,16 @@ def _reorder(
 def _semantic_patterns(
     solution: Solution,
 ) -> tuple[tuple[str, tuple[tuple[str, int], ...], int], ...]:
-    return tuple(sorted(
-        (
-            cut_pattern.stock_id,
-            tuple(sorted(cut_pattern.piece_counts.items())),
-            cut_pattern.repetitions,
+    return tuple(
+        sorted(
+            (
+                cut_pattern.stock_id,
+                tuple(sorted(cut_pattern.piece_counts.items())),
+                cut_pattern.repetitions,
+            )
+            for cut_pattern in solution.cut_patterns
         )
-        for cut_pattern in solution.cut_patterns
-    ))
+    )
 
 
 _REPRESENTATIVE_PROBLEMS = (
@@ -100,9 +101,7 @@ def test_stock_and_demand_permutations_preserve_solution_semantics(
         )
 
         reordered = solve(reordered_problem)
-        context = (
-            f"stock_order={stock_order}, demand_order={demand_order}"
-        )
+        context = f"stock_order={stock_order}, demand_order={demand_order}"
 
         assert reordered.solution_status is baseline.solution_status, context
         assert reordered.objective_value == baseline.objective_value, context

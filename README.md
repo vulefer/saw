@@ -1,8 +1,9 @@
 # saw
 A correctness-first solver for one-dimensional cutting-stock problems, with independently verified solutions, honest optimization guarantees, and reproducible benchmarks.
 
-The authoritative definition of the v0.1.0 problem is in
-[docs/problem-spec.md](docs/problem-spec.md).
+The authoritative definition of the problem, unchanged since v0.1.0, is in
+[docs/problem-spec.md](docs/problem-spec.md). How the solver works is
+explained in [docs/algorithm.md](docs/algorithm.md).
 
 The independently versioned JSON problem, solution, and error formats are
 defined in [docs/formats.md](docs/formats.md). Their version 1 contracts are
@@ -12,14 +13,14 @@ cannot be mistaken for an empty or verified plan. The `saw` command's usage,
 outcome, exit-code, and standard-stream rules are defined in
 [docs/cli.md](docs/cli.md).
 
-Before relying on a result, read the v0.1.0
+Before relying on a result, read the
 [guarantees](docs/guarantees.md) and
 [limitations](docs/limitations.md). In particular, a verified plan is not by
 itself proof that the plan is optimal, and the exact backend is intended only
 for small and medium-small instances.
 
-Saw v0.2.0's planned time, problem-size, numeric-magnitude, and pattern-count
-budgets have one authoritative [resource-limit contract](docs/resource-limits.md).
+Saw v0.2.0's time, problem-size, numeric-magnitude, and pattern-count
+budgets are on by default and have one authoritative [resource-limit contract](docs/resource-limits.md).
 It defines their units, safe defaults, override policy, end-to-end timing, and
 truthful outcomes with and without a verified incumbent.
 
@@ -41,14 +42,11 @@ problem = Problem(
 
 solution = solve(problem)
 if solution.solution_status is not SolutionStatus.OPTIMAL:
-    raise RuntimeError(
-        f"Expected an optimal solution, got {solution.solution_status.value}"
-    )
+    raise RuntimeError(f"Expected an optimal solution, got {solution.solution_status.value}")
 
 for cut_pattern in solution.cut_patterns:
     pieces = ", ".join(
-        f"{demand_id} x {count}"
-        for demand_id, count in cut_pattern.piece_counts.items()
+        f"{demand_id} x {count}" for demand_id, count in cut_pattern.piece_counts.items()
     )
     print(f"{cut_pattern.stock_id} x {cut_pattern.repetitions}: {pieces}")
 ```
@@ -95,20 +93,107 @@ The complete platform and unsupported-environment policy is documented in
 ## Development
 
 Use a supported CPython version. From the repository root, install the package
-and its development dependencies with:
+and its development dependencies, pinned to the same versions CI uses, with:
 
 ```shell
-python -m pip install -e ".[dev]"
+python -m pip install --constraint requirements/dev.txt -e ".[dev]"
 ```
 
-Run every test required for a release (unit, regression, oracle, and the
-documented example) with this single command from the repository root:
+The locks under `requirements/` and how to update them are described in
+[docs/dependencies.md](docs/dependencies.md).
+
+Run the whole v0.2.0 release gate, the same checks CI runs, with this single
+command from a clean checkout at the repository root:
 
 ```shell
 python scripts/run_release_tests.py
 ```
 
-The command exits with a non-zero status if any required test fails.
+It runs these phases in order:
+
+| Phase | What it runs |
+| --- | --- |
+| `static` | `scripts/run_static_checks.py`: formatting, lint, and types. |
+| `build` | `scripts/build_distributions.py`: builds and checks the sdist and wheel. |
+| `install` | Installs that wheel with the `dev` extra, pinned by `requirements/dev.txt`, into a fresh virtual environment in a temporary directory. |
+| `tests` | Unit, integration (CLI end to end), regression, oracle, and compatibility tests. |
+| `schemas` | The JSON schema and serialization contract tests, including the example documents in `examples/json/`. |
+| `examples` | `examples/minimal.py` and the Python example in this README. |
+| `smoke` | `scripts/smoke_test_wheel.py`: the wheel alone in another fresh environment. |
+
+The test phases run with the interpreter of the fresh environment, which
+imports `saw` from the installed wheel, so the result never depends on an
+editable install or anything else left in your development environment.
+Only the runner itself needs the `dev` extra. A failed phase does not stop
+the phases that do not need it; phases that do (for example `install` after a
+failed `build`) are reported as not run. The runner ends with a summary of
+every phase and exits non-zero naming each failed gate.
+
+Select phases with `--only PHASE` or `--skip PHASE` (both repeatable). Pass
+`--allow-dirty` to build from uncommitted changes (new files must be staged,
+since the sdist check compares against `git ls-files`), and
+`--current-environment` to run the test phases with the current interpreter
+instead of a fresh one, as CI does after installing the wheel itself; the
+runner then prints where `saw` was imported from.
+
+A full run takes about three minutes on a recent desktop: roughly 15 seconds
+to build, 40 to create and install the environment, 80 for the tests, 25 for
+the smoke test, and a few seconds for everything else. Building, installing,
+and the smoke test need network access to download the dependencies.
+
+Run the formatter check, the linter, and the type checker, exactly as CI
+does, with:
+
+```shell
+python scripts/run_static_checks.py
+```
+
+It runs `ruff format --check`, `ruff check`, and `mypy`, reports every failed
+check by name, and exits non-zero if any failed. Pass `--fix` to reformat and
+apply the safe lint fixes instead. All three tools are configured in
+`pyproject.toml`: ruff covers the whole tree with a 100-character line, and
+mypy runs in strict mode on `src/saw`, `scripts/`, and `examples/`. The test
+tree is deliberately not type checked, because many tests pass ill-typed
+values on purpose to exercise validation; ruff still formats and lints it.
+PuLP, cbcbox, and jsonschema ship no type information and, with tomli (only
+installed on Python 3.10), are the only modules mypy is told to skip.
+
+## Building release artifacts
+
+From a clean checkout with the development dependencies installed, build the
+source distribution and the wheel into `dist/` and check both with:
+
+```shell
+python scripts/build_distributions.py
+```
+
+The wheel is built from the sdist, so a file missing from the sdist fails the
+build. The script then validates the core metadata of both artifacts against
+`pyproject.toml`, checks that the wheel carries the `saw` console entry point,
+`py.typed` and the versioned JSON schemas from `src/saw/schemas/` with a
+matching `RECORD`, checks that the sdist holds exactly the tracked release
+files, and fails if the build left any change in the checkout other than
+ignored outputs (`dist/`, `build/`, `*.egg-info`). It refuses to run on a
+checkout with uncommitted changes unless `--allow-dirty` is passed.
+Timestamps in the wheel are pinned to the last commit, so the same commit and
+toolchain produce a byte-identical wheel.
+
+To test the wheel users actually receive rather than an editable install, run:
+
+```shell
+python scripts/smoke_test_wheel.py
+```
+
+It creates a fresh virtual environment in a temporary directory outside the
+checkout and installs only the wheel from `dist/` (no extras, runtime
+dependencies pinned by `requirements/dev.txt`, change with `--constraint`).
+It then imports every `saw` module from that environment, so an undeclared
+runtime dependency fails even in a module the examples never reach, checks
+`py.typed` and the packaged JSON schemas against the source tree, and runs the
+Python example, `saw --help`, `saw --version`, and `saw solve` on the
+documented problem, validating its output with the schema loaded from the
+installed wheel. Every failure names the gate that broke. It needs network
+access to install PuLP and cbcbox and takes about half a minute.
 
 ## Optimization backend dependencies
 
@@ -116,7 +201,12 @@ Saw v0.2 supports PuLP versions `>=3.3.2,<4` and cbcbox versions
 `>=2.929,<3`. Both are direct dependencies: PuLP provides the modeling API,
 and cbcbox provides the CBC executable used by the default backend.
 The adapter checks CBC availability at runtime and reports the installed PuLP
-version in its availability result.
+version in its availability result. No other runtime dependency is allowed
+into the core package; see [docs/dependencies.md](docs/dependencies.md).
 
 Public package publishing and release automation are deferred to a later
 release.
+
+## License
+
+Saw is proprietary software; see [LICENSE](LICENSE).

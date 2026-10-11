@@ -1,6 +1,5 @@
 import saw
 
-
 EXPECTED_PUBLIC_API = {
     "BackendStatus",
     "BackendUnavailableError",

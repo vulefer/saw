@@ -8,16 +8,16 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import contextlib
+from dataclasses import dataclass
+from importlib import metadata
 import io
-import json
 import os
 import sys
 import textwrap
 import traceback
-from importlib import metadata
-from dataclasses import dataclass
-from typing import IO, Callable
+from typing import IO, NoReturn, TypeGuard, cast
 
 from saw.exceptions import (
     BackendUnavailableError,
@@ -83,7 +83,7 @@ class _InputReadError(Exception):
 # argparse normally prints an error and exits, this raises instead
 # so a json error can be written to stdout, --help and --version still work normally
 class _ArgumentParser(argparse.ArgumentParser):
-    def error(self, message: str) -> None:
+    def error(self, message: str) -> NoReturn:
         raise _CliUsageError(message)
 
 
@@ -98,7 +98,8 @@ def _package_version() -> str:
 # builds the converter argparse uses for a limit flag, text -> number, or "none" -> None
 # doesnt check if the number is positive or finite, solve() does that
 def _optional_value_type(
-    convert: Callable[[str], object], expected: str,
+    convert: Callable[[str], object],
+    expected: str,
 ) -> Callable[[str], object]:
 
     def convert_or_none(raw: str) -> object:
@@ -115,9 +116,7 @@ def _optional_value_type(
                 reason = "the number has too many digits"
             else:
                 reason = f"expected {expected} or 'none'"
-            raise argparse.ArgumentTypeError(
-                f"invalid value {shown!r}: {reason}"
-            ) from error
+            raise argparse.ArgumentTypeError(f"invalid value {shown!r}: {reason}") from error
 
     return convert_or_none
 
@@ -198,7 +197,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # adds "saw solve" with its arguments and help text
-def _add_solve_subcommand(subparsers: argparse._SubParsersAction) -> None:
+def _add_solve_subcommand(
+    subparsers: argparse._SubParsersAction[_ArgumentParser],
+) -> None:
     parser = subparsers.add_parser(
         "solve",
         help="Solve a version 1 JSON cutting-stock problem.",
@@ -291,7 +292,7 @@ def _add_solve_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
 # True if the stream is the real stdout or stderr, only those are ever changed,
 # streams passed in by tests are left alone
-def _is_process_stream(stream: object) -> bool:
+def _is_process_stream(stream: IO[str] | None) -> TypeGuard[IO[str]]:
     return stream is not None and any(
         stream is candidate
         for candidate in (sys.stdout, sys.__stdout__, sys.stderr, sys.__stderr__)
@@ -366,12 +367,13 @@ class _StderrSink(io.TextIOBase):
 # makes the output the same on every platform, stdout always uses \n line endings
 # (also on windows) and stderr is utf-8 so non-ascii paths dont get mangled
 def _configure_process_streams(stdout: IO[str], stderr: IO[str]) -> None:
+    # the real streams are TextIOWrappers, anything else raises AttributeError
     if _is_process_stream(stdout):
         with contextlib.suppress(AttributeError, OSError, ValueError):
-            stdout.reconfigure(newline="\n")
+            cast(io.TextIOWrapper, stdout).reconfigure(newline="\n")
     if _is_process_stream(stderr):
         with contextlib.suppress(AttributeError, OSError, ValueError):
-            stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
+            cast(io.TextIOWrapper, stderr).reconfigure(encoding="utf-8", errors="backslashreplace")
 
 
 # writes one json document and a newline to stdout
@@ -428,7 +430,8 @@ def _read_input(path: str, stdin: IO[str] | None) -> bytes:
         try:
             buffer = getattr(stdin, "buffer", None)
             if buffer is not None:
-                return buffer.read()
+                data: bytes = buffer.read()
+                return data
             # a text only stream (e.g. StringIO in tests) is turned back into bytes,
             # surrogatepass keeps bad text bad so it is reported as invalid_json
             return stdin.read().encode("utf-8", "surrogatepass")
@@ -445,8 +448,7 @@ def _read_input(path: str, stdin: IO[str] | None) -> bytes:
         raise _InputReadError(
             "Could not read the input file.",
             # strerror is used so the path isnt shown twice
-            f"could not read input file '{path}': "
-            f"{getattr(error, 'strerror', None) or error}",
+            f"could not read input file '{path}': {getattr(error, 'strerror', None) or error}",
         ) from error
 
 
@@ -471,7 +473,10 @@ def _run_solve(
         problem_bytes = _read_input(args.input, stdin)
     except _InputReadError as error:
         return _emit_error(
-            stdout, stderr, ErrorCode.INPUT_READ_ERROR, str(error),
+            stdout,
+            stderr,
+            ErrorCode.INPUT_READ_ERROR,
+            str(error),
             diagnostic=error.detail,
         )
 
@@ -500,7 +505,10 @@ def _run_solve(
         if args.traceback:
             _print_traceback(stderr)
         return _emit_error(
-            stdout, stderr, ErrorCode.INTERNAL_VERIFICATION_ERROR, str(error),
+            stdout,
+            stderr,
+            ErrorCode.INTERNAL_VERIFICATION_ERROR,
+            str(error),
         )
 
     try:
@@ -515,7 +523,9 @@ def _run_solve(
     exit_code = _SOLUTION_STATUS_EXIT_CODES.get(solution.solution_status)
     if exit_code is None:
         return _emit_error(
-            stdout, stderr, ErrorCode.INTERNAL_ERROR,
+            stdout,
+            stderr,
+            ErrorCode.INTERNAL_ERROR,
             "An internal error prevented a result; see standard error.",
             diagnostic=(
                 "internal error: solve() returned an unmapped solution "
@@ -551,12 +561,15 @@ def main(
     handler = getattr(args, "handler", None)
     if handler is None:  # pragma: no cover - unreachable while "command" is required
         return _emit_error(
-            stdout, stderr, ErrorCode.INVALID_CLI_USAGE,
+            stdout,
+            stderr,
+            ErrorCode.INVALID_CLI_USAGE,
             "No command given. Run 'saw --help' for usage.",
         )
 
     try:
-        return handler(args, stdin=stdin, stdout=stdout, stderr=stderr)
+        exit_code: int = handler(args, stdin=stdin, stdout=stdout, stderr=stderr)
+        return exit_code
     except KeyboardInterrupt:
         # ctrl+c is the user's choice, not a failure, so just a short note and no json
         _print_diagnostic(stderr, f"{PROG}: interrupted")
@@ -570,7 +583,9 @@ def main(
         else:
             hint = " (rerun with --traceback for the full traceback)"
         return _emit_error(
-            stdout, stderr, ErrorCode.INTERNAL_ERROR,
+            stdout,
+            stderr,
+            ErrorCode.INTERNAL_ERROR,
             "An internal error prevented a result; see standard error.",
             diagnostic=f"internal error: {type(error).__name__}: {error}{hint}",
         )

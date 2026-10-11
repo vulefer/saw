@@ -14,7 +14,6 @@ from saw import (
     validate_problem,
 )
 
-
 ProblemFactory = Callable[[], Problem]
 
 

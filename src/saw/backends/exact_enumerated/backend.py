@@ -11,8 +11,8 @@ from saw.backends.base import (
     BackendCapabilities,
     BackendOptions,
     BackendSupport,
-    UnverifiedCandidate,
     UnverifiedBackendResult,
+    UnverifiedCandidate,
 )
 from saw.backends.exact_enumerated.output import (
     extract_backend_output,
@@ -38,7 +38,6 @@ from saw.models import (
 from saw.patterns import Pattern, enumerate_patterns_for_problem
 from saw.timing import Deadline
 
-
 # pulp writes numbers into cbc's model file with 13 significant digits,
 # so bigger integers get rounded and the result stops matching the plan
 # 10**12 leaves some margin, and is far below 2**53 where cbc's float math stops being exact
@@ -50,7 +49,8 @@ MAX_EXACT_MODEL_VALUE: Final[int] = 10**12
 def _largest_model_value(problem: Problem) -> int:
     total_stock_length = sum(stock.length * stock.quantity for stock in problem.stocks)
     largest_demand_quantity = max(
-        (demand.quantity for demand in problem.demands), default=0,
+        (demand.quantity for demand in problem.demands),
+        default=0,
     )
     return max(total_stock_length, largest_demand_quantity)
 
@@ -103,8 +103,7 @@ def _stopped_backend_result(
     # any other status could leave the model half solved, so no candidate is taken
     # LIMIT_REACHED only comes from this pipeline, never from pulp
     has_prior_stage_incumbent = (
-        backend_status is BackendStatus.LIMIT_REACHED
-        and len(completed_objective_stages) > 0
+        backend_status is BackendStatus.LIMIT_REACHED and len(completed_objective_stages) > 0
     )
 
     candidate = None
@@ -122,7 +121,8 @@ def _stopped_backend_result(
         candidate=candidate,
         diagnostics=Diagnostics(
             termination_reason=_termination_reason(
-                reported_backend_status, options,
+                reported_backend_status,
+                options,
             ),
             backend_status=reported_backend_status,
             elapsed_time=elapsed_time,
@@ -134,9 +134,7 @@ def _stopped_backend_result(
                 proven_stock_count
                 if proven_stock_count is not None
                 else (
-                    candidate.objective_value.stock_piece_count
-                    if candidate is not None
-                    else None
+                    candidate.objective_value.stock_piece_count if candidate is not None else None
                 )
             ),
         ),
@@ -337,9 +335,7 @@ def solve_exact_enumerated_pipeline(
             BackendStatus.LIMIT_REACHED,
             options,
             elapsed_time=current_elapsed_time(),
-            completed_objective_stages=(
-                ObjectiveStage.STOCK_PIECE_COUNT,
-            ),
+            completed_objective_stages=(ObjectiveStage.STOCK_PIECE_COUNT,),
             iterations=1,
             proven_stock_count=primary_result.optimal_stock_count,
         )
@@ -372,9 +368,7 @@ def solve_exact_enumerated_pipeline(
             secondary_result.backend_status,
             stage_2_options,
             elapsed_time=current_elapsed_time(),
-            completed_objective_stages=(
-                ObjectiveStage.STOCK_PIECE_COUNT,
-            ),
+            completed_objective_stages=(ObjectiveStage.STOCK_PIECE_COUNT,),
             iterations=2,
             proven_stock_count=primary_result.optimal_stock_count,
         )
@@ -443,7 +437,6 @@ def solve_exact_enumerated_pipeline(
 
 # backend that lists every cutting pattern and solves over them exactly with cbc
 class ExactEnumeratedBackend:
-
     _BACKEND_ID: Final[str] = "exact_enumerated"
 
     def __init__(self, adapter: PulpCbcAdapter | None = None) -> None:
@@ -508,9 +501,7 @@ class ExactEnumeratedBackend:
             )
 
             if enumeration.deadline_expired:
-                result = _time_limit_enumeration_result(
-                    enumeration.patterns_generated
-                )
+                result = _time_limit_enumeration_result(enumeration.patterns_generated)
             elif enumeration.limit_reached:
                 result = _pattern_limit_result(enumeration.patterns_generated)
             elif not enumeration.patterns:

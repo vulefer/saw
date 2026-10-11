@@ -50,9 +50,7 @@ class RecordingBackend:
     availability: BackendAvailability = field(
         default_factory=lambda: BackendAvailability(available=True)
     )
-    support: BackendSupport = field(
-        default_factory=lambda: BackendSupport(supported=True)
-    )
+    support: BackendSupport = field(default_factory=lambda: BackendSupport(supported=True))
     calls: list[str] = field(default_factory=list)
     received_problem: Problem | None = None
     received_options: BackendOptions | None = None
@@ -213,14 +211,8 @@ def test_expected_backend_outcomes_return_structured_solutions(
 ) -> None:
     problem = Problem(stocks=(), demands=())
     diagnostics = _diagnostics(backend_status)
-    candidate = (
-        UnverifiedCandidate((), ObjectiveValue(0, 0, 0))
-        if has_candidate
-        else None
-    )
-    backend = RecordingBackend(
-        UnverifiedBackendResult(candidate, diagnostics)
-    )
+    candidate = UnverifiedCandidate((), ObjectiveValue(0, 0, 0)) if has_candidate else None
+    backend = RecordingBackend(UnverifiedBackendResult(candidate, diagnostics))
     _install_backend(monkeypatch, "exact_enumerated", backend)
 
     result = solve(problem)
@@ -291,9 +283,7 @@ def test_feasible_status_without_candidate_raises_internal_error(
     backend_status: BackendStatus,
 ) -> None:
     problem = Problem(stocks=(), demands=())
-    backend = RecordingBackend(
-        UnverifiedBackendResult(None, _diagnostics(backend_status))
-    )
+    backend = RecordingBackend(UnverifiedBackendResult(None, _diagnostics(backend_status)))
     _install_backend(monkeypatch, "exact_enumerated", backend)
 
     with pytest.raises(
@@ -356,9 +346,7 @@ def test_unsupported_problem_returns_a_structured_solution(
     result = solve(problem)
 
     assert result.solution_status is SolutionStatus.UNSUPPORTED
-    assert result.diagnostics.termination_reason is (
-        TerminationReason.UNSUPPORTED_PROBLEM
-    )
+    assert result.diagnostics.termination_reason is (TerminationReason.UNSUPPORTED_PROBLEM)
     assert backend.calls == ["check_availability", "check_support"]
 
 

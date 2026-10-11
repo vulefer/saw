@@ -83,7 +83,7 @@ The first implementation should not support reusable remnants, cutting sequence,
 - Add structured errors and diagnostics.
 - Add a complete README, examples, algorithm explanation, and limitations.
 - Add continuous integration across supported Python versions and operating systems.
-- Add the license, contribution guide, code of conduct, changelog, and security policy.
+- Add the proprietary license.
 - Constrain direct dependencies and create a reproducible development environment.
 
 #### Release gate
@@ -176,7 +176,7 @@ This is the earliest release that should be made public, labeled **alpha**.
 - Stabilize the Python API, CLI, and JSON formats.
 - Define semantic-versioning and deprecation policies.
 - Document guarantees, non-guarantees, supported variants, and practical limits.
-- Complete security, governance, contribution, and release processes.
+- Complete security and release processes.
 - Publish checksummed or signed release artifacts.
 - Maintain a tested platform and Python compatibility matrix.
 - Provide migration guidance from earlier Saw releases and the legacy prototype.
@@ -360,10 +360,6 @@ saw/
 ├── PROJECT_PLAN.md
 ├── LICENSE
 ├── NOTICE
-├── CHANGELOG.md
-├── CONTRIBUTING.md
-├── CODE_OF_CONDUCT.md
-├── SECURITY.md
 ├── src/
 │   └── saw/
 │       ├── __init__.py
@@ -625,17 +621,14 @@ The core library must never depend on FastAPI, SQLAlchemy, PostgreSQL, authentic
 - `guarantees.md` defines statuses, proofs, bounds, and verification.
 - `formats.md` documents Python and JSON contracts with versioning rules.
 - `limitations.md` prominently lists unsupported constraints and practical limits.
-- `CHANGELOG.md` records user-visible changes under semantic versioning.
 
-## Contribution organization
+## Development rules
 
 - Require tests for behavioral changes.
 - Require a regression test for every correctness defect.
 - Require mathematical specification updates for new constraints or objectives.
 - Require benchmark evidence for performance claims.
 - Keep formatting and mechanical cleanup separate from algorithm changes.
-- Record contributor licensing expectations in `CONTRIBUTING.md`.
-- Consider Developer Certificate of Origin sign-off if appropriate for the project.
 - Label invalid-solution reports as the highest-priority defect category.
 
 Suggested issue categories:
@@ -660,7 +653,7 @@ Suggested issue categories:
 - Patch releases fix defects without intentionally changing supported behavior.
 - Minor releases add backward-compatible functionality where practical.
 - After v1.0, breaking Python API, CLI, status, or JSON changes require a major release.
-- Solver-result changes caused by bug fixes must be called out clearly in the changelog.
+- Solver-result changes caused by bug fixes must be called out clearly in the release.
 
 ## Release process
 
@@ -672,7 +665,7 @@ For every release:
 4. Run the defined benchmark smoke set.
 5. Build source and wheel artifacts from a clean checkout.
 6. Install and test the built artifacts in clean environments.
-7. Update documentation and changelog.
+7. Update documentation.
 8. Tag the exact tested commit.
 9. Publish checksums or signed artifacts.
 10. Verify the published installation and minimal example.

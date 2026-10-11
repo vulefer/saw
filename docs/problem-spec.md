@@ -1,5 +1,12 @@
 # Saw v0.1.0 problem specification
 
+> **v0.2.0:** this mathematical problem is unchanged in v0.2.0, and this
+> document remains its authoritative definition. v0.2.0 adds the command-line
+> interface and JSON formats ([cli.md](cli.md), [formats.md](formats.md)) and
+> resource limits ([resource-limits.md](resource-limits.md)) around it, so the
+> interface items listed as not part of v0.1.0 in section 1.1 are now
+> provided. The cutting, inventory, and objective limitations still apply.
+
 This document is the authoritative definition of the mathematical problem
 supported by Saw v0.1.0. Implementations, tests, and other documentation must
 conform to it. If another document disagrees with this one about v0.1.0 problem

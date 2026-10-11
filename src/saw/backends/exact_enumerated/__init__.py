@@ -10,8 +10,8 @@ from saw.backends.exact_enumerated.backend import (
     solve_exact_enumerated_pipeline,
 )
 from saw.backends.exact_enumerated.model import (
-    add_exact_demand_constraints,
     add_bounded_stock_constraints,
+    add_exact_demand_constraints,
     build_pattern_use_indicators,
     build_pattern_variables,
     build_total_leftover_expression,
@@ -34,12 +34,12 @@ from saw.backends.exact_enumerated.stages import (
 )
 
 __all__ = [
+    "ExactEnumeratedBackend",
     "PrimaryStockCountResult",
     "SecondaryLeftoverResult",
     "TertiaryDistinctPatternCountResult",
-    "ExactEnumeratedBackend",
-    "add_exact_demand_constraints",
     "add_bounded_stock_constraints",
+    "add_exact_demand_constraints",
     "build_pattern_use_indicators",
     "build_pattern_variables",
     "build_primary_stock_count_model",

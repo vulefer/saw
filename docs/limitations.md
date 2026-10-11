@@ -1,35 +1,43 @@
-# Saw v0.1.0 limitations
+# Saw v0.2.0 limitations
 
-Saw v0.1.0 is a correctness-focused development release for small and
-medium-small instances. It is not yet presented as production-ready.
+Saw v0.2.0 is a correctness-focused alpha release for small and medium-small
+instances. It is not yet presented as production-ready.
 
 ## Enumeration and resource use
 
 **The exact backend enumerates the complete bounded pattern set in memory
 before optimization. Pattern count can grow exponentially with the number and
-quantities of compatible demands. Saw v0.1.0 therefore provides no runtime or
-memory guarantee for any particular input size.**
+quantities of compatible demands.** There is no reliable universal size
+threshold: material grouping, lengths, quantities, and how many combinations
+fit each stock record all affect pattern count.
 
-There is no reliable universal size threshold: material grouping, lengths,
-quantities, and how many combinations fit each stock record all affect pattern
-count. Callers should use `diagnostics.patterns_generated` when comparing runs,
-but that value is available only after enumeration has completed.
+v0.2.0 therefore guards every call with safe default limits, defined in the
+[resource-limit contract](resource-limits.md):
 
-`SolveOptions.time_limit_seconds` is passed to each CBC optimization stage. It
-does not limit pattern enumeration, model construction, verification, or total
-wall-clock time, and a three-stage solve may spend up to the configured solver
-limit more than once. Treat it as a per-stage solver control, not as a hard
-end-to-end deadline.
+- one end-to-end `time_limit_seconds` deadline (default 30 seconds) shared by
+  validation, enumeration, model building, all three objective stages, and
+  verification;
+- `problem_size_limit` (default 200 stock and demand records);
+- `numeric_magnitude_limit` (default 1,000,000 for every length and quantity);
+  and
+- `pattern_limit` (default 50,000 enumerated patterns).
 
-Although `SolveOptions` exposes `pattern_limit`, the v0.1.0 exact backend does
-not implement it. Supplying one returns `UNSUPPORTED`; it does not truncate
-enumeration. Safe problem-size, enumeration, and end-to-end resource controls
-are roadmap work deferred to v0.2.0; they are not available in v0.1.0.
+A problem stopped by one of these limits receives a `LIMIT` result (or a
+verified `FEASIBLE` incumbent after a time limit), never a claim of
+infeasibility. Practical consequences:
 
-The units, defaults, disable/override behavior, and termination rules selected
-for that v0.2.0 work are defined in the
-[v0.2.0 resource-limit contract](resource-limits.md). That contract does not
-retroactively change v0.1.0 behavior.
+- The limits are guardrails, not guarantees. Memory is not measured directly,
+  so a problem under every default limit can still use substantial memory, and
+  a solve may finish slightly after the deadline because deadline checks are
+  cooperative.
+- A problem stopped by `pattern_limit` or a size guard is not optimized at
+  all. Saw never optimizes a truncated pattern set.
+- Raising or disabling a limit (passing `None`) is allowed per call, but
+  removes that protection, including the risk of excessive time or memory use
+  that v0.1.0 had.
+
+`diagnostics.patterns_generated` reports how many patterns were enumerated
+and is useful for comparing runs and choosing a `pattern_limit`.
 
 ## Exact-backend numeric range
 
@@ -43,7 +51,7 @@ only affects very large inputs; disabling that limit does not lift this one.
 
 ## Unsupported cutting and inventory semantics
 
-v0.1.0 does not support:
+v0.2.0 solves the same problem as v0.1.0 and does not support:
 
 - non-zero kerf, blade width, or end trim;
 - fractional lengths, alternate units, or unit conversion;
@@ -55,7 +63,7 @@ v0.1.0 does not support:
 - two-dimensional or three-dimensional packing geometry.
 
 A reported leftover is only unused length on a consumed stock piece. It has no
-future inventory value in the v0.1.0 model.
+future inventory value in the model.
 
 ## Unsupported objectives and interfaces
 
@@ -63,11 +71,15 @@ The objective is fixed to stock-piece count, then leftover, then distinct
 pattern count. There are no caller-provided prices, weighted objectives,
 custom tradeoffs, or alternative objective orderings.
 
-The only supported interface is the Python library. v0.1.0 does not provide a
-command-line interface, JSON input or output, versioned JSON schemas, web or
-database integration, or company-specific inventory behavior. It also does
-not include a column-generation or heuristic backend.
+The supported interfaces are the Python library and the `saw` command with the
+version 1 JSON formats ([cli.md](cli.md), [formats.md](formats.md)). v0.2.0
+does not provide a web API, database integration, or company-specific
+inventory behaviour, and it has no column-generation or heuristic backend, so
+large instances are out of scope.
 
-Several of those capabilities appear under v0.2.0 or later in the project
-roadmap, but roadmap entries are future work and are not part of the v0.1.0 API
-or guarantees.
+Supported Python versions and platforms are listed in
+[compatibility.md](compatibility.md). Packages are not published to a public
+index.
+
+Items on the project roadmap for later releases are future work and are not
+part of the v0.2.0 API or guarantees.

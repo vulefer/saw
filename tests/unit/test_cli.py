@@ -25,9 +25,7 @@ from saw.solve import SolveOptions
 _VALID_PROBLEM_JSON = json.dumps(
     {
         "format_version": 1,
-        "stocks": [
-            {"stock_id": "stock-10", "material_id": "steel", "length": 10, "quantity": 1}
-        ],
+        "stocks": [{"stock_id": "stock-10", "material_id": "steel", "length": 10, "quantity": 1}],
         "demands": [
             {"demand_id": "demand-6", "material_id": "steel", "length": 6, "quantity": 1},
             {"demand_id": "demand-4", "material_id": "steel", "length": 4, "quantity": 1},
@@ -145,9 +143,7 @@ class _UnreadableStdin:
 def test_unreadable_stdin_is_an_input_read_error() -> None:
     stdout, stderr = io.StringIO(), io.StringIO()
 
-    exit_code = cli.main(
-        ["solve", "-"], stdin=_UnreadableStdin(), stdout=stdout, stderr=stderr
-    )
+    exit_code = cli.main(["solve", "-"], stdin=_UnreadableStdin(), stdout=stdout, stderr=stderr)
 
     assert exit_code == 74
     assert json.loads(stdout.getvalue())["error"]["code"] == "input_read_error"
@@ -181,12 +177,8 @@ def test_empty_input_is_invalid_json(tmp_path, source: str, content: bytes) -> N
 
 _NON_ASCII_PROBLEM = {
     "format_version": 1,
-    "stocks": [
-        {"stock_id": "šipka-10", "material_id": "čelik", "length": 10, "quantity": 1}
-    ],
-    "demands": [
-        {"demand_id": "komad-ž", "material_id": "čelik", "length": 6, "quantity": 1}
-    ],
+    "stocks": [{"stock_id": "šipka-10", "material_id": "čelik", "length": 10, "quantity": 1}],
+    "demands": [{"demand_id": "komad-ž", "material_id": "čelik", "length": 6, "quantity": 1}],
 }
 
 
@@ -289,7 +281,8 @@ def test_unknown_option_is_invalid_cli_usage() -> None:
 
 def test_non_numeric_limit_value_is_invalid_cli_usage() -> None:
     exit_code, stdout, _ = _run(
-        ["solve", "--time-limit", "not-a-number"], stdin_text=_VALID_PROBLEM_JSON,
+        ["solve", "--time-limit", "not-a-number"],
+        stdin_text=_VALID_PROBLEM_JSON,
     )
 
     assert exit_code == 2
@@ -307,7 +300,8 @@ def test_semantically_invalid_limit_value_is_rejected_by_solve_not_the_parser() 
     # 0 parses fine as an int; solve.SolveOptions is the one that rejects it
     # (docs/resource-limits.md), and the CLI only translates that ValueError.
     exit_code, stdout, _ = _run(
-        ["solve", "--pattern-limit", "0"], stdin_text=_VALID_PROBLEM_JSON,
+        ["solve", "--pattern-limit", "0"],
+        stdin_text=_VALID_PROBLEM_JSON,
     )
 
     assert exit_code == 2
@@ -328,11 +322,16 @@ def test_options_and_none_sentinel_are_threaded_to_solve_options_unchanged(
     exit_code, _, _ = _run(
         [
             "solve",
-            "--backend", "custom-backend",
-            "--time-limit", "none",
-            "--pattern-limit", "none",
-            "--problem-size-limit", "none",
-            "--numeric-magnitude-limit", "none",
+            "--backend",
+            "custom-backend",
+            "--time-limit",
+            "none",
+            "--pattern-limit",
+            "none",
+            "--problem-size-limit",
+            "none",
+            "--numeric-magnitude-limit",
+            "none",
         ],
         stdin_text=_VALID_PROBLEM_JSON,
     )
@@ -361,10 +360,14 @@ def test_numeric_limit_values_are_parsed_and_threaded(
     exit_code, _, _ = _run(
         [
             "solve",
-            "--time-limit", "5.5",
-            "--pattern-limit", "10",
-            "--problem-size-limit", "20",
-            "--numeric-magnitude-limit", "30",
+            "--time-limit",
+            "5.5",
+            "--pattern-limit",
+            "10",
+            "--problem-size-limit",
+            "20",
+            "--numeric-magnitude-limit",
+            "30",
         ],
         stdin_text=_VALID_PROBLEM_JSON,
     )
@@ -531,9 +534,7 @@ def test_traceback_flag_writes_the_traceback_to_stderr_only(
 
     monkeypatch.setattr(cli, "solve", fake_solve)
 
-    exit_code, stdout, stderr = _run(
-        ["solve", "--traceback"], stdin_text=_VALID_PROBLEM_JSON
-    )
+    exit_code, stdout, stderr = _run(["solve", "--traceback"], stdin_text=_VALID_PROBLEM_JSON)
 
     assert exit_code == 70
     assert stdout.count("\n") == 1
@@ -551,9 +552,7 @@ def test_traceback_flag_covers_handled_backend_failures(
 
     monkeypatch.setattr(cli, "solve", fake_solve)
 
-    exit_code, stdout, stderr = _run(
-        ["solve", "--traceback"], stdin_text=_VALID_PROBLEM_JSON
-    )
+    exit_code, stdout, stderr = _run(["solve", "--traceback"], stdin_text=_VALID_PROBLEM_JSON)
 
     assert exit_code == 70
     assert json.loads(stdout)["error"]["code"] == "internal_verification_error"
@@ -704,7 +703,8 @@ def test_help_documents_input_modes_output_behavior_and_limits(
 
 def test_an_integer_past_the_digit_limit_is_named_as_too_long() -> None:
     exit_code, stdout, _ = _run(
-        ["solve", "--pattern-limit", "9" * 5000], stdin_text=_VALID_PROBLEM_JSON,
+        ["solve", "--pattern-limit", "9" * 5000],
+        stdin_text=_VALID_PROBLEM_JSON,
     )
 
     assert exit_code == 2
@@ -724,7 +724,10 @@ def test_an_interactive_stdin_gets_a_hint_on_stderr() -> None:
     stderr = io.StringIO()
 
     exit_code = cli.main(
-        ["solve"], stdin=_TerminalStdin(_VALID_PROBLEM_JSON), stdout=stdout, stderr=stderr,
+        ["solve"],
+        stdin=_TerminalStdin(_VALID_PROBLEM_JSON),
+        stdout=stdout,
+        stderr=stderr,
     )
 
     assert exit_code == 0

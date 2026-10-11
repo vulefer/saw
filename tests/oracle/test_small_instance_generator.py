@@ -1,5 +1,4 @@
 from saw import validate_problem
-
 from tests.oracle import generate_small_instances, solve_small_instance
 
 
@@ -20,18 +19,10 @@ def test_every_generated_problem_is_valid() -> None:
 def test_generated_records_vary_lengths_and_positive_quantities() -> None:
     problems = generate_small_instances()
 
-    assert {
-        stock.length for problem in problems for stock in problem.stocks
-    } == {3, 5}
-    assert {
-        stock.quantity for problem in problems for stock in problem.stocks
-    } == {1, 2}
-    assert {
-        demand.length for problem in problems for demand in problem.demands
-    } == {2, 4}
-    assert {
-        demand.quantity for problem in problems for demand in problem.demands
-    } == {1, 2}
+    assert {stock.length for problem in problems for stock in problem.stocks} == {3, 5}
+    assert {stock.quantity for problem in problems for stock in problem.stocks} == {1, 2}
+    assert {demand.length for problem in problems for demand in problem.demands} == {2, 4}
+    assert {demand.quantity for problem in problems for demand in problem.demands} == {1, 2}
 
 
 def test_some_generated_problems_have_multiple_stock_lengths() -> None:
@@ -42,15 +33,10 @@ def test_some_generated_problems_have_multiple_stock_lengths() -> None:
 
 def test_generated_set_contains_feasible_and_infeasible_problems() -> None:
     outcomes = tuple(
-        (problem, solve_small_instance(problem))
-        for problem in generate_small_instances()
+        (problem, solve_small_instance(problem)) for problem in generate_small_instances()
     )
 
+    assert any(problem.demands and result.feasible for problem, result in outcomes)
     assert any(
-        problem.demands and result.feasible
-        for problem, result in outcomes
-    )
-    assert any(
-        problem.stocks and problem.demands and not result.feasible
-        for problem, result in outcomes
+        problem.stocks and problem.demands and not result.feasible for problem, result in outcomes
     )

@@ -33,7 +33,8 @@ def _packaged_cbc_path() -> str | None:
     except ImportError:
         return None
 
-    return cbcbox.cbc_bin_path()
+    path: str | None = cbcbox.cbc_bin_path()
+    return path
 
 
 # creates a cbc solver, using the cbcbox executable if there is one
@@ -75,13 +76,10 @@ class PulpCbcAdapter:
         try:
             solver = _new_cbc_solver(BackendOptions())
             available = bool(solver.available())
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - any failure means cbc is unavailable
             return BackendAvailability(
                 available=False,
-                reason=(
-                    "PuLP/CBC availability check failed with "
-                    f"{type(exc).__name__}: {exc}"
-                ),
+                reason=(f"PuLP/CBC availability check failed with {type(exc).__name__}: {exc}"),
                 backend_version=pulp.__version__,
             )
 
@@ -106,9 +104,7 @@ class PulpCbcAdapter:
         try:
             return _new_cbc_solver(options)
         except Exception as exc:
-            raise PulpAdapterError(
-                "PuLP/CBC solver construction failed."
-            ) from exc
+            raise PulpAdapterError("PuLP/CBC solver construction failed.") from exc
 
     # solves an already built pulp model and returns the translated status
     # cbc is checked again here since it could disappear after check_availability
@@ -122,9 +118,7 @@ class PulpCbcAdapter:
         try:
             available = bool(solver.available())
         except Exception as exc:
-            raise PulpAdapterError(
-                "PuLP/CBC availability check failed before solving."
-            ) from exc
+            raise PulpAdapterError("PuLP/CBC availability check failed before solving.") from exc
 
         if not available:
             raise BackendUnavailableError(

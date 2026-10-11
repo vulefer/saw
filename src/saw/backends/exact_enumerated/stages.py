@@ -6,8 +6,8 @@ import pulp
 
 from saw.backends.base import BackendOptions
 from saw.backends.exact_enumerated.model import (
-    add_exact_demand_constraints,
     add_bounded_stock_constraints,
+    add_exact_demand_constraints,
     build_pattern_use_indicators,
     build_pattern_variables,
     build_total_leftover_expression,
@@ -16,8 +16,8 @@ from saw.backends.pulp_backend import PulpCbcAdapter
 from saw.models import BackendStatus, Problem
 from saw.patterns import Pattern
 
-
 _INTEGRALITY_TOLERANCE = 1e-7
+
 
 # wrappers for different optimization stage results
 @dataclass(frozen=True, slots=True)
@@ -25,15 +25,18 @@ class PrimaryStockCountResult:
     backend_status: BackendStatus
     optimal_stock_count: int | None
 
+
 @dataclass(frozen=True, slots=True)
 class SecondaryLeftoverResult:
     backend_status: BackendStatus
     optimal_total_leftover: int | None
 
+
 @dataclass(frozen=True, slots=True)
 class TertiaryDistinctPatternCountResult:
     backend_status: BackendStatus
     optimal_distinct_pattern_count: int | None
+
 
 # constructs the primary (stock count) expression for the model
 def build_primary_stock_count_model(
@@ -58,6 +61,7 @@ def build_primary_stock_count_model(
 
     return model, pattern_variables, stock_count
 
+
 # helper function that contains the shared part of the code that checks if the result is integral
 def _read_integral_objective(
     expression: pulp.LpAffineExpression,
@@ -67,16 +71,15 @@ def _read_integral_objective(
     raw_value = pulp.value(expression)
 
     if raw_value is None:
-        raise RuntimeError(
-            "CBC reported an optimal result without an objective value."
-        )
+        raise RuntimeError("CBC reported an optimal result without an objective value.")
 
-    rounded_value = round(raw_value)
+    rounded_value: int = round(raw_value)
 
     if abs(raw_value - rounded_value) > _INTEGRALITY_TOLERANCE:
         raise RuntimeError(f"The optimal {description} was not integral.")
 
     return rounded_value
+
 
 # function that solves the primary optimization
 def solve_primary_stock_count_stage(
@@ -101,6 +104,7 @@ def solve_primary_stock_count_stage(
         ),
     )
 
+
 # configures the optimal stock count constraint and sets the objective to the total leftover
 def configure_secondary_leftover_stage(
     model: pulp.LpProblem,
@@ -121,6 +125,7 @@ def configure_secondary_leftover_stage(
     model.setObjective(total_leftover)
 
     return total_leftover
+
 
 # function that solves the secondary optimization
 def solve_secondary_leftover_stage(
@@ -145,6 +150,7 @@ def solve_secondary_leftover_stage(
         ),
     )
 
+
 # configures the total leftover constraint and sets the objective to the distinct pattern count
 def configure_tertiary_pattern_count_stage(
     model: pulp.LpProblem,
@@ -167,6 +173,7 @@ def configure_tertiary_pattern_count_stage(
     model.setObjective(distinct_pattern_count)
 
     return distinct_pattern_count
+
 
 # function that solves the ternary optimization
 def solve_tertiary_pattern_count_stage(

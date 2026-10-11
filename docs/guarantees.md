@@ -1,14 +1,15 @@
-# Saw v0.1.0 guarantees
+# Saw v0.2.0 guarantees
 
-This document states what callers may infer from a v0.1.0 result. The
+This document states what callers may infer from a v0.2.0 result. The
 [problem specification](problem-spec.md) remains the authoritative definition
 of the mathematical problem. The practical and feature boundaries are listed
 in [limitations.md](limitations.md).
 
 ## Supported problem semantics
 
-Saw v0.1.0 supports a bounded, one-dimensional cutting-stock problem through
-the Python library:
+Saw v0.2.0 supports a bounded, one-dimensional cutting-stock problem through
+the Python library and the `saw` command, which share one validation,
+solving, and verification path:
 
 - stock and demand lengths are positive integer millimetres;
 - stock inventory is a hard per-stock-ID bound;
@@ -24,6 +25,12 @@ pattern within the input bounds and solves all three objective stages. It can
 therefore prove optimality or infeasibility when every required stage finishes
 conclusively. Completeness does not imply that an instance will finish within
 practical time or memory; see [Enumeration and resource use](limitations.md#enumeration-and-resource-use).
+How the backend works is explained in [algorithm.md](algorithm.md).
+
+Every call runs under the default resource limits unless the caller changes
+them. A limit changes only whether Saw attempts or continues a solve, never the
+feasible set or the objective; see the
+[resource-limit contract](resource-limits.md).
 
 ## Reading a result
 
@@ -81,7 +88,9 @@ the public status:
 - `completed_objective_stages` lists stages proved optimal before execution
   stopped;
 - `patterns_generated` reports the size of the enumerated model;
-- `lower_bound` and `upper_bound`, when present in v0.1.0, concern the primary
+- `termination_reason` is `time_limit`, `size_limit`, or `pattern_limit` when
+  a resource limit stopped the solve;
+- `lower_bound` and `upper_bound`, when present, concern the primary
   stock-piece-count objective; and
 - a `None` bound means that Saw reports no bound.
 

@@ -41,10 +41,14 @@ because the adapter imports cbcbox to locate that executable.
 PuLP 3.3.2 is the minimum supported PuLP release because it provides the
 cbcbox-based CBC installation path used by Saw. CI runs dedicated
 minimum-dependency jobs on all three supported operating systems with PuLP
-3.3.2 and cbcbox 2.929. The normal compatibility jobs resolve the newest
-non-prerelease versions permitted by the declared ranges. Every job checks
-CBC availability and completes an end-to-end solve through the release test
-suite.
+3.3.2 and cbcbox 2.929, installed from `requirements/minimum.txt`. The
+compatibility matrix installs from `requirements/dev.txt`, which pins the
+newest versions the ranges allowed when it was last regenerated, and a
+separate latest-dependencies job resolves the newest non-prerelease versions
+without a lock. Every job checks CBC availability and completes an
+end-to-end solve through the release test suite. How bounds are chosen and
+how the locks are updated is documented in
+[dependencies.md](dependencies.md).
 
 ## Unsupported interpreters and platforms
 
@@ -77,8 +81,11 @@ The compatibility contract is enforced in four places:
    supported Python and operating-system combination.
 3. The release suite checks that it is running on a declared interpreter,
    platform, and architecture and that the packaged CBC executable is usable.
-4. The minimum-dependency and built-wheel jobs verify the lower dependency
-   bounds and clean package installation respectively.
+4. The minimum-dependency and latest-dependency jobs verify the lower
+   dependency bounds and the newest releases within the bounds, and every
+   CI job tests the one built wheel, including a clean installation into a
+   fresh environment. The jobs and the matrix strategy are described in
+   [ci.md](ci.md).
 
 Any change to the supported matrix must update all four enforcement points in
 the same pull request.

@@ -13,10 +13,10 @@ one newline-terminated JSON document, and no traceback ever reaches it.
 
 from __future__ import annotations
 
-import io
-import json
 from dataclasses import dataclass, field
 from importlib import import_module
+import io
+import json
 from pathlib import Path
 
 import pytest
@@ -44,25 +44,22 @@ from saw.models import (
 from saw.patterns import Pattern
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_VALID_PROBLEM = (
-    _REPO_ROOT / "examples" / "json" / "problem-v1-valid.json"
-).read_text(encoding="utf-8")
+_VALID_PROBLEM = (_REPO_ROOT / "examples" / "json" / "problem-v1-valid.json").read_text(
+    encoding="utf-8"
+)
 
 # Three 6-long pieces cannot come from two 10-long stocks: infeasible.
 _INFEASIBLE_PROBLEM = json.dumps(
     {
         "format_version": 1,
-        "stocks": [
-            {"stock_id": "stock-10", "material_id": "steel", "length": 10, "quantity": 2}
-        ],
-        "demands": [
-            {"demand_id": "demand-6", "material_id": "steel", "length": 6, "quantity": 3}
-        ],
+        "stocks": [{"stock_id": "stock-10", "material_id": "steel", "length": 10, "quantity": 2}],
+        "demands": [{"demand_id": "demand-6", "material_id": "steel", "length": 6, "quantity": 3}],
     }
 )
 
 _VALID_PATTERN = CutPattern(
-    Pattern("stock-10", {"demand-6": 1, "demand-4": 1}), repetitions=1,
+    Pattern("stock-10", {"demand-6": 1, "demand-4": 1}),
+    repetitions=1,
 )
 # Cuts 6+6 from a 10-long stock: over capacity and the wrong demands.
 _CORRUPTED_PATTERN = CutPattern(Pattern("stock-10", {"demand-6": 2}), repetitions=1)
@@ -119,7 +116,9 @@ class FakeBackend:
         return self.availability
 
     def check_support(
-        self, problem: Problem, options: BackendOptions,
+        self,
+        problem: Problem,
+        options: BackendOptions,
     ) -> BackendSupport:
         return BackendSupport(
             supported=self.supported,
@@ -127,7 +126,9 @@ class FakeBackend:
         )
 
     def solve(
-        self, problem: Problem, options: BackendOptions,
+        self,
+        problem: Problem,
+        options: BackendOptions,
     ) -> UnverifiedBackendResult:
         if self.prints is not None:
             print(self.prints)
@@ -146,7 +147,10 @@ def _run(argv: list[str], stdin_text: str) -> tuple[int, str, str]:
     stdout = io.StringIO()
     stderr = io.StringIO()
     exit_code = cli.main(
-        argv, stdin=io.StringIO(stdin_text), stdout=stdout, stderr=stderr,
+        argv,
+        stdin=io.StringIO(stdin_text),
+        stdout=stdout,
+        stderr=stderr,
     )
     return exit_code, stdout.getvalue(), stderr.getvalue()
 
@@ -191,8 +195,13 @@ def _assert_error_envelope(stdout: str, code: str) -> dict:
         ),
     ],
     ids=[
-        "malformed", "duplicate-member", "nan-constant", "unclosed-deep-nesting",
-        "closed-deep-nesting", "format-version-2", "missing-members",
+        "malformed",
+        "duplicate-member",
+        "nan-constant",
+        "unclosed-deep-nesting",
+        "closed-deep-nesting",
+        "format-version-2",
+        "missing-members",
         "zero-quantity",
     ],
 )
@@ -250,7 +259,8 @@ def test_proved_infeasibility_exits_3_with_a_solution_envelope() -> None:
 
 
 @pytest.mark.parametrize(
-    "limit_flag", ["--problem-size-limit", "--numeric-magnitude-limit"],
+    "limit_flag",
+    ["--problem-size-limit", "--numeric-magnitude-limit"],
 )
 def test_a_preflight_limit_exits_4_without_a_plan(limit_flag: str) -> None:
     exit_code, stdout, _ = _run(["solve", limit_flag, "1"], _VALID_PROBLEM)
@@ -263,10 +273,12 @@ def test_a_preflight_limit_exits_4_without_a_plan(limit_flag: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "reason", [TerminationReason.TIME_LIMIT, TerminationReason.PATTERN_LIMIT],
+    "reason",
+    [TerminationReason.TIME_LIMIT, TerminationReason.PATTERN_LIMIT],
 )
 def test_a_backend_limit_without_an_incumbent_exits_4(
-    monkeypatch: pytest.MonkeyPatch, reason: TerminationReason,
+    monkeypatch: pytest.MonkeyPatch,
+    reason: TerminationReason,
 ) -> None:
     _install_backend(
         monkeypatch,
@@ -311,7 +323,8 @@ def test_an_unavailable_cbc_exits_6_through_the_real_backend(
     # The real exact_enumerated backend and PuLP adapter; only the CBC
     # executable lookup is made to fail.
     monkeypatch.setattr(
-        "saw.backends.pulp_backend._new_cbc_solver", lambda options: _MissingCbc(),
+        "saw.backends.pulp_backend._new_cbc_solver",
+        lambda options: _MissingCbc(),
     )
 
     exit_code, stdout, stderr = _run(["solve"], _VALID_PROBLEM)
@@ -342,9 +355,7 @@ def test_cbc_disappearing_mid_solve_still_exits_6(
 def _backend_result(status: BackendStatus, *, corrupted: bool = False, candidate: bool = True):
     pattern = _CORRUPTED_PATTERN if corrupted else _VALID_PATTERN
     return UnverifiedBackendResult(
-        candidate=(
-            UnverifiedCandidate((pattern,), _VALID_OBJECTIVE) if candidate else None
-        ),
+        candidate=(UnverifiedCandidate((pattern,), _VALID_OBJECTIVE) if candidate else None),
         diagnostics=_diagnostics(status),
     )
 
@@ -381,7 +392,9 @@ _INTERNAL_FAILURES: dict[str, FakeBackend] = {
 @pytest.mark.parametrize("traceback_flag", [False, True], ids=["default", "traceback"])
 @pytest.mark.parametrize("backend", _INTERNAL_FAILURES.values(), ids=_INTERNAL_FAILURES)
 def test_internal_failures_exit_70_without_a_false_claim(
-    monkeypatch: pytest.MonkeyPatch, backend: FakeBackend, traceback_flag: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    backend: FakeBackend,
+    traceback_flag: bool,
 ) -> None:
     _install_backend(monkeypatch, backend)
     argv = ["solve", "--traceback"] if traceback_flag else ["solve"]
@@ -392,7 +405,8 @@ def test_internal_failures_exit_70_without_a_false_claim(
     document = _single_document(stdout)
     if "error" in document:
         assert document["error"]["code"] in {
-            "internal_error", "internal_verification_error",
+            "internal_error",
+            "internal_verification_error",
         }
     else:
         # docs/cli.md: a structured backend error is a solution envelope
@@ -412,7 +426,8 @@ def test_internal_error_envelope_hides_exception_details(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_backend(
-        monkeypatch, FakeBackend(raises=RuntimeError("secret C:\\Users\\me\\model.lp")),
+        monkeypatch,
+        FakeBackend(raises=RuntimeError("secret C:\\Users\\me\\model.lp")),
     )
 
     exit_code, stdout, stderr = _run(["solve"], _VALID_PROBLEM)
@@ -429,7 +444,8 @@ def test_an_unmapped_solution_status_is_an_internal_error_not_a_second_document(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_backend(
-        monkeypatch, FakeBackend(result=_backend_result(BackendStatus.OPTIMAL)),
+        monkeypatch,
+        FakeBackend(result=_backend_result(BackendStatus.OPTIMAL)),
     )
     exit_codes = dict(cli._SOLUTION_STATUS_EXIT_CODES)
     del exit_codes[SolutionStatus.OPTIMAL]
@@ -446,7 +462,8 @@ def test_an_unmapped_solution_status_is_an_internal_error_not_a_second_document(
 
 
 def test_stray_backend_prints_go_to_stderr_not_the_json_document(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
 ) -> None:
     _install_backend(
         monkeypatch,

@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-import saw.serialization
 from saw import (
     BackendStatus,
     CutPattern,
@@ -25,16 +24,13 @@ from saw import (
     problem_from_json,
 )
 from saw.patterns import Pattern
+import saw.serialization
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 VALID_EXAMPLE_PATH = REPOSITORY_ROOT / "examples" / "json" / "problem-v1-valid.json"
-OPTIMAL_SOLUTION_EXAMPLE_PATH = (
-    REPOSITORY_ROOT / "examples" / "json" / "solution-v1-optimal.json"
-)
+OPTIMAL_SOLUTION_EXAMPLE_PATH = REPOSITORY_ROOT / "examples" / "json" / "solution-v1-optimal.json"
 
-MINIMAL_VALID_JSON = json.dumps(
-    {"format_version": 1, "stocks": [], "demands": []}
-)
+MINIMAL_VALID_JSON = json.dumps({"format_version": 1, "stocks": [], "demands": []})
 
 
 def _valid_stock(**overrides: object) -> dict[str, object]:
@@ -140,9 +136,7 @@ def test_syntactically_invalid_json_is_rejected() -> None:
 
 
 def test_duplicate_top_level_member_names_are_rejected() -> None:
-    duplicated = (
-        '{"format_version": 1, "format_version": 1, "stocks": [], "demands": []}'
-    )
+    duplicated = '{"format_version": 1, "format_version": 1, "stocks": [], "demands": []}'
 
     with pytest.raises(SerializationError) as excinfo:
         problem_from_json(duplicated)
@@ -151,9 +145,7 @@ def test_duplicate_top_level_member_names_are_rejected() -> None:
 
 
 def test_duplicate_member_names_inside_a_stock_object_are_rejected() -> None:
-    duplicated = json.dumps(_valid_payload()).replace(
-        '"length": 10', '"length": 10, "length": 10'
-    )
+    duplicated = json.dumps(_valid_payload()).replace('"length": 10', '"length": 10, "length": 10')
 
     with pytest.raises(SerializationError) as excinfo:
         problem_from_json(duplicated)
@@ -429,15 +421,11 @@ def _cut_pattern(
     return CutPattern(pattern=Pattern(stock_id, counts), repetitions=repetitions)
 
 
-_OBJECTIVE_VALUE = ObjectiveValue(
-    stock_piece_count=1, total_leftover=0, distinct_pattern_count=1
-)
+_OBJECTIVE_VALUE = ObjectiveValue(stock_piece_count=1, total_leftover=0, distinct_pattern_count=1)
 _VALID_REPORT = VerificationReport(findings=())
 
 _ALWAYS_REQUIRED_MEMBERS = frozenset({"format_version", "solution_status", "diagnostics"})
-_VERIFIED_PLAN_MEMBERS = frozenset(
-    {"cut_patterns", "objective_value", "verification_report"}
-)
+_VERIFIED_PLAN_MEMBERS = frozenset({"cut_patterns", "objective_value", "verification_report"})
 
 
 def _optimal_solution(**overrides: object) -> Solution:
@@ -564,9 +552,7 @@ def test_json_from_solution_matches_the_documented_optimal_example() -> None:
 
     text = json_from_solution(solution)
 
-    assert json.loads(text) == json.loads(
-        OPTIMAL_SOLUTION_EXAMPLE_PATH.read_text(encoding="utf-8")
-    )
+    assert json.loads(text) == json.loads(OPTIMAL_SOLUTION_EXAMPLE_PATH.read_text(encoding="utf-8"))
 
 
 # --- Every public status has direct, unambiguous coverage ------------------
@@ -700,9 +686,7 @@ def test_completed_objective_stages_round_trip_in_order() -> None:
     [(None, None), (3, None), (None, 3), (3, 3)],
     ids=["both-null", "lower-only", "upper-only", "both-numeric"],
 )
-def test_bounds_round_trip_including_null(
-    lower_bound: int | None, upper_bound: int | None
-) -> None:
+def test_bounds_round_trip_including_null(lower_bound: int | None, upper_bound: int | None) -> None:
     solution = _limit_without_plan_solution(
         diagnostics=_diagnostics(
             termination_reason=TerminationReason.TIME_LIMIT,
@@ -794,7 +778,7 @@ def test_verification_findings_round_trip_present_context_only(
     # report's (always-empty) findings array.
     report = VerificationReport(findings=(finding,))
 
-    payload = saw.serialization._verification_report_payload(report)  # noqa: SLF001
+    payload = saw.serialization._verification_report_payload(report)
 
     expected: dict[str, object] = {"code": finding.code.value, "message": finding.message}
     if finding.stock_id is not None:
@@ -970,7 +954,8 @@ def test_problem_from_json_rejects_undecoded_bytes() -> None:
     ],
 )
 def test_every_serialization_error_has_an_envelope_code(
-    code: SerializationErrorCode, error_code: str,
+    code: SerializationErrorCode,
+    error_code: str,
 ) -> None:
     assert SerializationError("x", code=code).error_code == error_code
 

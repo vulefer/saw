@@ -55,40 +55,33 @@ def solve_small_instance(problem: Problem) -> OracleResult:
         for stock in problem.stocks
         for _ in range(stock.quantity)
     )
-    demand_pieces = tuple(sorted(
-        (
-            _DemandPiece(demand.demand_id, demand.material_id, demand.length)
-            for demand in problem.demands
-            for _ in range(demand.quantity)
-        ),
-        key=lambda piece: (
-            piece.material_id,
-            -piece.length,
-            piece.demand_id,
-        ),
-    ))
+    demand_pieces = tuple(
+        sorted(
+            (
+                _DemandPiece(demand.demand_id, demand.material_id, demand.length)
+                for demand in problem.demands
+                for _ in range(demand.quantity)
+            ),
+            key=lambda piece: (
+                piece.material_id,
+                -piece.length,
+                piece.demand_id,
+            ),
+        )
+    )
 
     remaining_lengths = [stock.length for stock in stock_pieces]
-    piece_counts: list[dict[str, int]] = [
-        {} for _ in stock_pieces
-    ]
+    piece_counts: list[dict[str, int]] = [{} for _ in stock_pieces]
     best: OracleObjective | None = None
 
     def visit(demand_index: int, used_stock_count: int) -> None:
         nonlocal best
 
-        if (
-            best is not None
-            and used_stock_count > best.stock_piece_count
-        ):
+        if best is not None and used_stock_count > best.stock_piece_count:
             return
 
         if demand_index == len(demand_pieces):
-            used_indexes = tuple(
-                index
-                for index, counts in enumerate(piece_counts)
-                if counts
-            )
+            used_indexes = tuple(index for index, counts in enumerate(piece_counts) if counts)
             patterns = {
                 (
                     stock_pieces[index].stock_id,
@@ -98,9 +91,7 @@ def solve_small_instance(problem: Problem) -> OracleResult:
             }
             objective = OracleObjective(
                 stock_piece_count=len(used_indexes),
-                total_leftover=sum(
-                    remaining_lengths[index] for index in used_indexes
-                ),
+                total_leftover=sum(remaining_lengths[index] for index in used_indexes),
                 distinct_pattern_count=len(patterns),
             )
 
@@ -109,9 +100,7 @@ def solve_small_instance(problem: Problem) -> OracleResult:
             return
 
         demand_piece = demand_pieces[demand_index]
-        equivalent_stock_states: set[
-            tuple[str, int, tuple[tuple[str, int], ...]]
-        ] = set()
+        equivalent_stock_states: set[tuple[str, int, tuple[tuple[str, int], ...]]] = set()
 
         for stock_index, stock in enumerate(stock_pieces):
             if stock.material_id != demand_piece.material_id:
@@ -130,28 +119,21 @@ def solve_small_instance(problem: Problem) -> OracleResult:
 
             was_unused = not piece_counts[stock_index]
             next_used_stock_count = used_stock_count + int(was_unused)
-            if (
-                best is not None
-                and next_used_stock_count > best.stock_piece_count
-            ):
+            if best is not None and next_used_stock_count > best.stock_piece_count:
                 continue
 
             previous_count = piece_counts[stock_index].get(
                 demand_piece.demand_id,
                 0,
             )
-            piece_counts[stock_index][demand_piece.demand_id] = (
-                previous_count + 1
-            )
+            piece_counts[stock_index][demand_piece.demand_id] = previous_count + 1
             remaining_lengths[stock_index] -= demand_piece.length
 
             visit(demand_index + 1, next_used_stock_count)
 
             remaining_lengths[stock_index] += demand_piece.length
             if previous_count:
-                piece_counts[stock_index][demand_piece.demand_id] = (
-                    previous_count
-                )
+                piece_counts[stock_index][demand_piece.demand_id] = previous_count
             else:
                 del piece_counts[stock_index][demand_piece.demand_id]
 

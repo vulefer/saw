@@ -1,7 +1,7 @@
 from typing import Any
 
-import pytest
 from pulp import constants as pulp_constants
+import pytest
 
 from saw.backends.base import BackendOptions
 from saw.backends.pulp_backend import (
@@ -140,9 +140,7 @@ def test_availability_failure_retains_diagnostic_context(
     monkeypatch.setattr(
         pulp_backend.pulp,
         "COIN_CMD",
-        lambda **kwargs: FakeSolver(
-            availability_error=RuntimeError("solver lookup detail")
-        ),
+        lambda **kwargs: FakeSolver(availability_error=RuntimeError("solver lookup detail")),
     )
 
     availability = PulpCbcAdapter().check_availability()
@@ -172,9 +170,7 @@ def test_solver_configuration_passes_the_time_limit(
         lambda: "C:/solver/cbc.exe",
     )
 
-    created = PulpCbcAdapter().create_solver(
-        BackendOptions(time_limit_seconds=12.5)
-    )
+    created = PulpCbcAdapter().create_solver(BackendOptions(time_limit_seconds=12.5))
 
     assert created is solver
     assert captured == {

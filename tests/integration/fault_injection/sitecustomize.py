@@ -18,7 +18,6 @@ import sys
 
 
 def _install(fault: str) -> None:
-    import saw.solve  # noqa: F401 - loads the module for sys.modules below
     from saw.backends.base import (
         BackendAvailability,
         BackendCapabilities,
@@ -36,6 +35,7 @@ def _install(fault: str) -> None:
         TerminationReason,
     )
     from saw.patterns import Pattern
+    import saw.solve
 
     if fault == "cbc-missing":
         # The real backend and PuLP adapter; only the CBC lookup fails.
@@ -60,7 +60,8 @@ def _install(fault: str) -> None:
     ) -> UnverifiedBackendResult:
         return UnverifiedBackendResult(
             candidate=(
-                None if pattern is None
+                None
+                if pattern is None
                 else UnverifiedCandidate((pattern,), ObjectiveValue(1, 0, 1))
             ),
             diagnostics=Diagnostics(
@@ -78,16 +79,24 @@ def _install(fault: str) -> None:
     real_backend = ExactEnumeratedBackend()
     outcomes = {
         "feasible": result(
-            BackendStatus.FEASIBLE, TerminationReason.TIME_LIMIT, valid,
+            BackendStatus.FEASIBLE,
+            TerminationReason.TIME_LIMIT,
+            valid,
         ),
         "limit-with-incumbent": result(
-            BackendStatus.LIMIT_REACHED, TerminationReason.TIME_LIMIT, valid,
+            BackendStatus.LIMIT_REACHED,
+            TerminationReason.TIME_LIMIT,
+            valid,
         ),
         "backend-failure": result(
-            BackendStatus.FAILED, TerminationReason.BACKEND_FAILURE, None,
+            BackendStatus.FAILED,
+            TerminationReason.BACKEND_FAILURE,
+            None,
         ),
         "corrupted-candidate": result(
-            BackendStatus.OPTIMAL, TerminationReason.COMPLETED, corrupted,
+            BackendStatus.OPTIMAL,
+            TerminationReason.COMPLETED,
+            corrupted,
         ),
     }
     raised = {
