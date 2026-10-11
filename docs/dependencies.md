@@ -33,7 +33,7 @@ and nothing else:
 | --- | --- | --- |
 | pytest | `>=9,<10` | Runs the release suite. |
 | jsonschema | `>=4.23,<5` | Checks JSON output against the draft 2020-12 schemas in `src/saw/schemas/`. |
-| packaging | `>=24,<27` | Parses requirements and versions in the dependency policy tests. |
+| packaging | `>=24.2,<27` | Parses requirements and versions in the dependency policy tests and validates built metadata; 24.2 is the first release that reads metadata 2.4 (`License-Expression`, `License-File`). |
 | tomli | `>=2.0.1,<3` (Python 3.10 only) | Reads `pyproject.toml` where `tomllib` is not available. |
 | build | `>=1.2.1,<2` | Builds the sdist and wheel in `scripts/build_distributions.py`. |
 | ruff | `>=0.16.9,<0.17` | Formats and lints in `scripts/run_static_checks.py`. Ruff changes its formatter style and rules between 0.x minor releases, so the upper bound is the next minor. |

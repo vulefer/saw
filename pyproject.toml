@@ -59,8 +59,10 @@ saw = "saw.cli:main"
 dev = [
     # checks the json contract tests against the draft 2020-12 schemas
     "jsonschema>=4.23,<5",
-    # reads pyproject.toml and the locks in the dependency policy tests
-    "packaging>=24,<27",
+    # reads pyproject.toml and the locks in the dependency policy tests and
+    # validates built metadata; 24.2 is the first release that reads metadata
+    # 2.4 (License-Expression, License-File)
+    "packaging>=24.2,<27",
     "tomli>=2.0.1,<3; python_version < '3.11'",
     # runs the release suite
     "pytest>=9,<10",
