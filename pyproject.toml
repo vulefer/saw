@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "saw"
-version = "0.2.0.dev0"
+version = "0.2.0"
 description = "A correctness-first solver for one-dimensional cutting-stock problems with independently verified solutions."
 readme = "README.md"
 # saw is proprietary, see LICENSE; PEP 639 forbids a license classifier next to this

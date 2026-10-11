@@ -37,6 +37,7 @@ Thumbs.db
 
 # local planning exports and credentials
 linear_api.txt
+saw-service-i-naplata.md
 *.csv
 /outputs/
 

@@ -1,8 +1,9 @@
 # saw
 A correctness-first solver for one-dimensional cutting-stock problems, with independently verified solutions, honest optimization guarantees, and reproducible benchmarks.
 
-The authoritative definition of the v0.1.0 problem is in
-[docs/problem-spec.md](docs/problem-spec.md).
+The authoritative definition of the problem, unchanged since v0.1.0, is in
+[docs/problem-spec.md](docs/problem-spec.md). How the solver works is
+explained in [docs/algorithm.md](docs/algorithm.md).
 
 The independently versioned JSON problem, solution, and error formats are
 defined in [docs/formats.md](docs/formats.md). Their version 1 contracts are
@@ -12,14 +13,14 @@ cannot be mistaken for an empty or verified plan. The `saw` command's usage,
 outcome, exit-code, and standard-stream rules are defined in
 [docs/cli.md](docs/cli.md).
 
-Before relying on a result, read the v0.1.0
+Before relying on a result, read the
 [guarantees](docs/guarantees.md) and
 [limitations](docs/limitations.md). In particular, a verified plan is not by
 itself proof that the plan is optimal, and the exact backend is intended only
 for small and medium-small instances.
 
-Saw v0.2.0's planned time, problem-size, numeric-magnitude, and pattern-count
-budgets have one authoritative [resource-limit contract](docs/resource-limits.md).
+Saw v0.2.0's time, problem-size, numeric-magnitude, and pattern-count
+budgets are on by default and have one authoritative [resource-limit contract](docs/resource-limits.md).
 It defines their units, safe defaults, override policy, end-to-end timing, and
 truthful outcomes with and without a verified incumbent.
 
@@ -205,3 +206,7 @@ into the core package; see [docs/dependencies.md](docs/dependencies.md).
 
 Public package publishing and release automation are deferred to a later
 release.
+
+## License
+
+Saw is proprietary software; see [LICENSE](LICENSE).
